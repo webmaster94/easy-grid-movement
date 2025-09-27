@@ -1,3 +1,11 @@
+/**
+ * Core entry point for the Easy Grid Movement module.
+ *
+ * Highlights grid squares reachable by controlled tokens while respecting
+ * movement budgets and scene collision data. Comments throughout the file
+ * provide additional context on the heuristics used to interact with Foundry's
+ * grid API.
+ */
 const MODULE_ID = "easy-grid-movement";
 
 const LAYER_NAMES = {
@@ -13,9 +21,19 @@ const DEFAULTS = {
   cellLimit: 5000
 };
 
+// Keep helpers dependency-free so the module remains portable.
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+// The location of the highlight interface moved between Foundry versions.
+// Checking both locations avoids runtime errors when running on older builds.
 const getGridInterface = () => canvas?.interface?.grid ?? canvas?.grid ?? null;
 
+/**
+ * Lightweight priority queue tailored for Dijkstra exploration.
+ *
+ * Implemented locally so we don't rely on external utilities or Foundry
+ * internals. Only the operations we need (push/pop) are implemented.
+ */
 class PriorityQueue {
   constructor(comparator) {
     this._data = [];
@@ -70,6 +88,9 @@ class PriorityQueue {
   }
 }
 
+/**
+ * Coordinates the highlight workflow and reacts to Foundry events.
+ */
 class MovementHighlighter {
   constructor() {
     this.active = false;
@@ -93,6 +114,7 @@ class MovementHighlighter {
     return this.deactivate();
   }
 
+  /** Activate highlighting or refresh if already active. */
   activate() {
     if (this.active) {
       this.scheduleRefresh("reactivate");
@@ -105,6 +127,7 @@ class MovementHighlighter {
     return true;
   }
 
+  /** Tear down highlight layers and cancel pending work. */
   deactivate() {
     if (!this.active) return false;
     this.active = false;
@@ -117,6 +140,7 @@ class MovementHighlighter {
     return true;
   }
 
+  /** Recompute highlights when the configuration changes. */
   onSettingsChanged() {
     this._cache.clear();
     this._neighborOffsets = null;
@@ -127,6 +151,7 @@ class MovementHighlighter {
     }
   }
 
+  /** Debounce refresh requests to avoid thrashing Foundry's grid API. */
   scheduleRefresh(reason = "manual") {
     if (!this.active) return;
     if (this._refreshTimeout) clearTimeout(this._refreshTimeout);
@@ -140,6 +165,10 @@ class MovementHighlighter {
     }, 150);
   }
 
+  /**
+   * Entry point for highlight calculation. Validates preconditions and
+   * dispatches to the search helper for each controlled token.
+   */
   refresh() {
     if (!this.active) return;
     if (!canvas?.ready) return;
@@ -175,6 +204,7 @@ class MovementHighlighter {
     let limitHit = false;
     let hadSpeed = false;
 
+    // Hard cap exploration to avoid pathological cases on enormous maps.
     const cellLimit = Number(game.settings.get(MODULE_ID, "cellLimit")) || DEFAULTS.cellLimit;
 
     for (const token of tokens) {
@@ -190,6 +220,7 @@ class MovementHighlighter {
       hadSpeed = true;
       this._notified.zeroSpeed.delete(token.id);
       const normalBudget = speed;
+      // Dash follows the default Foundry behaviour of doubling movement.
       const dashBudget = speed * 2;
       const cacheKey = this._buildCacheKey(token, normalBudget, dashBudget, cellLimit);
       let result = this._getCachedResult(token, cacheKey);
@@ -201,6 +232,7 @@ class MovementHighlighter {
       if (result.limitHit) limitHit = true;
 
       for (const [key, cell] of result.normal.entries()) {
+        // Later tokens overwrite earlier ones ensuring the latest data wins.
         normalAggregate.set(key, cell);
       }
       for (const [key, cell] of result.dash.entries()) {
@@ -225,6 +257,7 @@ class MovementHighlighter {
     }
   }
 
+  /** Reset per-refresh notification guards. */
   _resetNotifications() {
     this._notified = {
       noToken: false,
@@ -234,6 +267,9 @@ class MovementHighlighter {
     };
   }
 
+  /**
+   * Determine which tokens should be processed based on the multi select mode.
+   */
   _getTokensToHighlight() {
     const controlled = canvas.tokens?.controlled ?? [];
     if (!controlled.length) return [];
@@ -242,6 +278,9 @@ class MovementHighlighter {
     return [controlled[0]];
   }
 
+  /**
+   * Attempt to resolve a usable speed value from a token's data.
+   */
   _getTokenSpeed(token) {
     const actor = token.actor;
     const movement = actor?.system?.attributes?.movement;
@@ -258,6 +297,9 @@ class MovementHighlighter {
     return 0;
   }
 
+  /**
+   * Explore the grid around the token while respecting collision and costs.
+   */
   _performSearch(token, normalBudget, dashBudget, cellLimit) {
     const grid = canvas.grid;
     const scene = canvas.scene;
@@ -295,8 +337,11 @@ class MovementHighlighter {
       y: Math.round(startYRaw)
     };
 
+    // Translate speed budgets from scene units into grid step counts.
     const distPerCell = Number(canvas.dimensions?.distance ?? scene.grid?.distance) || 5;
+    // Provide a safety margin so diagonal moves beyond the budget are evaluated.
     const maxSteps = Math.ceil((dashBudget / Math.max(distPerCell, 0.0001)) + 2);
+    // Bounding box prevents runaway exploration while still capturing relevant cells.
     const bounds = {
       minX: start.x - maxSteps - Math.ceil((token.document.width ?? 1) / 2),
       maxX: start.x + maxSteps + Math.ceil((token.document.width ?? 1) / 2),
@@ -304,12 +349,14 @@ class MovementHighlighter {
       maxY: start.y + maxSteps + Math.ceil((token.document.height ?? 1) / 2)
     };
 
+    // Grid specific neighbour data (including diagonals) drives the search fan-out.
     const offsets = this._getNeighborOffsets();
     if (!offsets.length) return { normal, dash, limitHit: false };
 
     const frontier = new PriorityQueue((a, b) => a.cost - b.cost);
     const visited = new Map();
 
+    // Seed the search from the token's current grid position.
     frontier.push({ x: start.x, y: start.y, cost: 0 });
 
     let limitHit = false;
@@ -319,6 +366,7 @@ class MovementHighlighter {
       if (!current) break;
       const key = this._cellKey(current.x, current.y);
       const prev = visited.get(key);
+      // Found a cheaper path to this cell before, skip inferior entry.
       if (prev !== undefined && prev <= current.cost) continue;
       visited.set(key, current.cost);
 
@@ -354,6 +402,7 @@ class MovementHighlighter {
         const totalCost = current.cost + segmentCost;
         if (totalCost > dashBudget + 0.001) continue;
 
+        // The queue stores the accumulated cost so the cheapest cell is popped next.
         frontier.push({ x: nx, y: ny, cost: totalCost });
       }
     }
@@ -361,6 +410,9 @@ class MovementHighlighter {
     return { normal, dash, limitHit };
   }
 
+  /**
+   * Leverage Foundry's measurement APIs to calculate the cost between cells.
+   */
   _measureSegment(token, from, to) {
     try {
       if (typeof token.checkCollision === "function") {
@@ -407,6 +459,9 @@ class MovementHighlighter {
     return Infinity;
   }
 
+  /**
+   * Draw the computed normal and dash ranges on their respective layers.
+   */
   _renderHighlights(normalCells, dashCells) {
     const grid = canvas.grid;
     if (!grid) return;
@@ -433,6 +488,7 @@ class MovementHighlighter {
     }
   }
 
+  /** Ensure a highlight layer exists and uses the provided opacity. */
   _ensureLayer(name, alpha) {
     const gridInterface = getGridInterface();
     if (!gridInterface) return null;
@@ -448,6 +504,9 @@ class MovementHighlighter {
     return layer;
   }
 
+  /**
+   * Highlight a single cell using whichever API the grid exposes.
+   */
   _highlightCell(layer, layerName, cell, color, alpha) {
     const grid = canvas.grid;
     if (!grid) return;
@@ -476,6 +535,9 @@ class MovementHighlighter {
     }
   }
 
+  /**
+   * Construct a polygon describing the highlighted cell for manual drawing.
+   */
   _getCellShape(x, y) {
     const grid = canvas.grid;
     if (!grid) return null;
@@ -540,6 +602,7 @@ class MovementHighlighter {
     ];
   }
 
+  /** Convert CSS color strings to the numeric form expected by PIXI. */
   _colorToNumber(color) {
     if (typeof foundry?.utils?.colorStringToHex === "function") {
       return foundry.utils.colorStringToHex(color);
@@ -547,6 +610,9 @@ class MovementHighlighter {
     return Number(`0x${color.replace("#", "")}`);
   }
 
+  /**
+   * Convert grid coordinates to pixel center points with graceful fallbacks.
+   */
   _cellToCenterPixels(x, y) {
     const grid = canvas.grid;
     if (!grid) return null;
@@ -568,6 +634,9 @@ class MovementHighlighter {
     return { x: (x + 0.5) * size, y: (y + 0.5) * size };
   }
 
+  /**
+   * Build a string key that captures the parameters affecting search results.
+   */
   _buildCacheKey(token, normalBudget, dashBudget, cellLimit) {
     const scene = canvas.scene;
     const grid = canvas.scene?.grid || {};
@@ -591,16 +660,21 @@ class MovementHighlighter {
     return parts.join("|");
   }
 
+  /** Fetch cached results when the token has not changed. */
   _getCachedResult(token, key) {
     const cached = this._cache.get(token.id);
     if (cached?.key === key) return cached.result;
     return null;
   }
 
+  /** Cache newly computed search results for reuse. */
   _setCachedResult(token, key, result) {
     this._cache.set(token.id, { key, result });
   }
 
+  /**
+   * Retrieve the neighbour offsets used to explore adjacent cells.
+   */
   _getNeighborOffsets() {
     if (this._neighborOffsets && this._neighborOffsets.length) return this._neighborOffsets;
     const grid = canvas.grid;
@@ -628,10 +702,12 @@ class MovementHighlighter {
     return this._neighborOffsets;
   }
 
+  /** Create a stable key for storing cell data in maps. */
   _cellKey(x, y) {
     return `${x},${y}`;
   }
 
+  /** Clear all highlight layers created by this module. */
   _clearLayers() {
     const gridInterface = getGridInterface();
     if (!gridInterface) return;
@@ -644,6 +720,7 @@ class MovementHighlighter {
     }
   }
 
+  /** Wire up all hook listeners that should trigger highlight refreshes. */
   _registerHooks() {
     Hooks.on("controlToken", () => this._handleControlChange());
     Hooks.on("updateToken", (doc) => this._handleTokenDocumentChange(doc));
@@ -661,30 +738,35 @@ class MovementHighlighter {
     Hooks.on("updateCombat", () => this._handleCombatChange());
   }
 
+  /** Refresh when token selection changes. */
   _handleControlChange() {
     this._cache.clear();
     this._notified.zeroSpeed.clear();
     this.scheduleRefresh("controlChange");
   }
 
+  /** React to document-level token changes that may affect position or speed. */
   _handleTokenDocumentChange(doc) {
     if (doc?.parent?.id !== canvas.scene?.id) return;
     this._cache.delete(doc.id);
     this.scheduleRefresh("tokenDocumentChange");
   }
 
+  /** Handle redraws of controlled tokens which may change collision results. */
   _handleTokenRefresh(token) {
     if (!token?.controlled) return;
     this._cache.delete(token.id);
     this.scheduleRefresh("tokenRefresh");
   }
 
+  /** Reset caches when the canvas is fully initialised. */
   _handleCanvasReady() {
     this._cache.clear();
     this._neighborOffsets = null;
     if (this.active) this.scheduleRefresh("canvasReady");
   }
 
+  /** Re-evaluate highlights after scene configuration updates. */
   _handleSceneUpdate(scene) {
     if (scene?.id !== canvas.scene?.id) return;
     this._cache.clear();
@@ -692,12 +774,14 @@ class MovementHighlighter {
     if (this.active) this.scheduleRefresh("sceneUpdate");
   }
 
+  /** React to obstacle changes such as walls or regions. */
   _handleSceneObstacleChange(doc) {
     if (doc?.parent?.id !== canvas.scene?.id) return;
     this._cache.clear();
     if (this.active) this.scheduleRefresh("sceneObstacleChange");
   }
 
+  /** Re-check movement ranges when combat state changes. */
   _handleCombatChange() {
     if (!this.active) return;
     this.scheduleRefresh("combatChange");
@@ -715,6 +799,7 @@ Hooks.once("ready", () => {
   highlighter = new MovementHighlighter();
 });
 
+/** Register all user-configurable settings exposed in the module manifest. */
 function registerSettings() {
   game.settings.register(MODULE_ID, "normalColor", {
     name: game.i18n.localize("EGM.Settings.normalColor.Name"),
@@ -773,6 +858,7 @@ function registerSettings() {
   });
 }
 
+/** Register a keybinding that toggles the highlighter on demand. */
 function registerKeybindings() {
   game.keybindings.register(MODULE_ID, "toggle-highlight", {
     name: game.i18n.localize("EGM.Keybinding.Toggle.Name"),
