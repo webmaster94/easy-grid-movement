@@ -14,6 +14,7 @@ const DEFAULTS = {
 };
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const getGridInterface = () => canvas?.interface?.grid ?? canvas?.grid ?? null;
 
 class PriorityQueue {
   constructor(comparator) {
@@ -265,16 +266,30 @@ class MovementHighlighter {
 
     if (!grid || !scene) return { normal, dash, limitHit: false };
 
-    let startPos;
-    if (typeof grid.getGridPositionFromPixels === "function") {
-      startPos = grid.getGridPositionFromPixels(token.center.x, token.center.y);
-    } else if (typeof grid.grid?.getGridPositionFromPixels === "function") {
-      startPos = grid.grid.getGridPositionFromPixels(token.center.x, token.center.y);
+    let startOffset;
+    const centerPoint = token.center;
+    if (typeof grid.getOffset === "function") {
+      try {
+        startOffset = grid.getOffset(centerPoint, { round: true });
+      } catch (err) {
+        console.debug(`${MODULE_ID} | getOffset failed`, err);
+      }
+    } else if (typeof grid.grid?.getOffset === "function") {
+      try {
+        startOffset = grid.grid.getOffset(centerPoint, { round: true });
+      } catch (err) {
+        console.debug(`${MODULE_ID} | inner getOffset failed`, err);
+      }
     }
+
     const size = canvas.dimensions?.size ?? 100;
-    const [startXRaw, startYRaw] = Array.isArray(startPos)
-      ? startPos
-      : [token.center.x / size, token.center.y / size];
+    const [startXRaw, startYRaw] = Array.isArray(startOffset)
+      ? startOffset
+      : [
+          startOffset?.x ?? startOffset?.i ?? startOffset?.column ?? centerPoint.x / size,
+          startOffset?.y ?? startOffset?.j ?? startOffset?.row ?? centerPoint.y / size
+        ];
+
     const start = {
       x: Math.round(startXRaw),
       y: Math.round(startYRaw)
@@ -356,30 +371,52 @@ class MovementHighlighter {
       console.debug(`${MODULE_ID} | Collision check failed`, err);
     }
 
-    if (typeof canvas.grid?.measureDistances !== "function") return Infinity;
+    const grid = canvas.grid;
+    if (!grid) return Infinity;
 
-    const ray = new Ray(from, to);
+    const RayClass = foundry?.canvas?.geometry?.Ray ?? window?.Ray;
+    if (!RayClass) return Infinity;
+
+    const ray = new RayClass(from, to);
+    const units = Number(canvas.dimensions?.distance ?? canvas.scene?.grid?.distance) || 5;
+
     try {
-      const distances = canvas.grid.measureDistances([{ ray }], { gridSpaces: true, token });
-      const dist = Number(distances?.[0]);
-      if (!Number.isFinite(dist)) return Infinity;
-      const units = Number(canvas.dimensions?.distance ?? canvas.scene.grid?.distance) || 5;
-      return dist * units;
+      if (typeof grid.measurePath === "function") {
+        const measurement = grid.measurePath({ ray, token, gridSpaces: true });
+        let dist;
+        if (Array.isArray(measurement)) {
+          const entry = measurement[0];
+          dist = typeof entry === "number" ? entry : entry?.distance ?? entry?.gridDistance ?? entry?.totalDistance;
+        } else if (typeof measurement === "number") {
+          dist = measurement;
+        } else if (measurement && typeof measurement === "object") {
+          dist = measurement.distance ?? measurement.gridDistance ?? measurement.totalDistance;
+        }
+        if (Number.isFinite(dist)) return dist * units;
+      }
+
+      if (typeof grid.measureDistances === "function") {
+        const distances = grid.measureDistances([{ ray }], { gridSpaces: true, token });
+        const dist = Number(Array.isArray(distances) ? distances[0] : distances);
+        if (Number.isFinite(dist)) return dist * units;
+      }
     } catch (err) {
       console.error(`${MODULE_ID} | Failed to measure segment`, err);
-      return Infinity;
     }
+
+    return Infinity;
   }
 
   _renderHighlights(normalCells, dashCells) {
     const grid = canvas.grid;
     if (!grid) return;
+    const gridInterface = getGridInterface();
+    if (!gridInterface) return;
 
     const highlightAlpha = Number(game.settings.get(MODULE_ID, "highlightAlpha"));
     const alpha = Number.isFinite(highlightAlpha) ? clamp(highlightAlpha, 0, 1) : DEFAULTS.highlightAlpha;
-
-    grid.clearHighlightLayer(LAYER_NAMES.normal);
-    grid.clearHighlightLayer(LAYER_NAMES.dash);
+    gridInterface.clearHighlightLayer(LAYER_NAMES.normal);
+    gridInterface.clearHighlightLayer(LAYER_NAMES.dash);
 
     const normalLayer = this._ensureLayer(LAYER_NAMES.normal, alpha);
     const dashLayer = this._ensureLayer(LAYER_NAMES.dash, alpha);
@@ -397,21 +434,31 @@ class MovementHighlighter {
   }
 
   _ensureLayer(name, alpha) {
-    const grid = canvas.grid;
-    if (!grid) return null;
-    let layer = grid.highlightLayers?.[name];
-    if (!layer) {
-      layer = grid.addHighlightLayer(name);
+    const gridInterface = getGridInterface();
+    if (!gridInterface) return null;
+    let layer = gridInterface.highlightLayers?.[name];
+    if (!layer && typeof gridInterface.addHighlightLayer === "function") {
+      try {
+        layer = gridInterface.addHighlightLayer(name);
+      } catch (err) {
+        console.error(`${MODULE_ID} | Failed to add highlight layer ${name}`, err);
+      }
     }
     if (layer) layer.alpha = alpha;
     return layer;
   }
 
   _highlightCell(layer, layerName, cell, color, alpha) {
-    if (!canvas?.grid) return;
     const grid = canvas.grid;
+    if (!grid) return;
+    const gridInterface = getGridInterface();
     try {
-      grid.highlightGridPosition(layerName, { x: cell.x, y: cell.y, color });
+      if (typeof gridInterface?.highlightPosition === "function") {
+        gridInterface.highlightPosition(layerName, { x: cell.x, y: cell.y, color });
+        if (layer) layer.alpha = alpha;
+        return;
+      }
+      grid.highlightGridPosition?.(layerName, { x: cell.x, y: cell.y, color });
       if (layer) layer.alpha = alpha;
       return;
     } catch (err) {
@@ -432,11 +479,28 @@ class MovementHighlighter {
   _getCellShape(x, y) {
     const grid = canvas.grid;
     if (!grid) return null;
-    if (typeof grid.getGridHighlightPositions === "function") {
+    if (typeof grid.getHighlightPositions === "function") {
+      const positions = grid.getHighlightPositions({ x, y });
+      if (positions?.shape) return positions.shape;
+    } else if (typeof grid.getGridHighlightPositions === "function") {
       const positions = grid.getGridHighlightPositions({ x, y });
       if (positions?.shape) return positions.shape;
     }
-    if (typeof grid.getGridBounds === "function") {
+    if (typeof grid.getRect === "function") {
+      const rect = grid.getRect({ x, y });
+      if (rect) {
+        return [
+          rect.x,
+          rect.y,
+          rect.x + rect.width,
+          rect.y,
+          rect.x + rect.width,
+          rect.y + rect.height,
+          rect.x,
+          rect.y + rect.height
+        ];
+      }
+    } else if (typeof grid.getGridBounds === "function") {
       const bounds = grid.getGridBounds(x, y);
       if (bounds) {
         return [
@@ -452,7 +516,18 @@ class MovementHighlighter {
       }
     }
     const size = canvas.dimensions?.size ?? 100;
-    const topLeft = typeof canvas.grid.getTopLeft === "function" ? canvas.grid.getTopLeft(x, y) : [x * size, y * size];
+    let topLeft;
+    if (typeof grid.getTopLeftPoint === "function") {
+      const point = grid.getTopLeftPoint({ x, y });
+      if (point) topLeft = [point.x, point.y];
+    }
+    if (!topLeft && typeof grid.getTopLeft === "function") {
+      topLeft = grid.getTopLeft(x, y);
+    }
+    if (!topLeft) {
+      topLeft = [x * size, y * size];
+    }
+
     return [
       topLeft[0],
       topLeft[1],
@@ -475,7 +550,12 @@ class MovementHighlighter {
   _cellToCenterPixels(x, y) {
     const grid = canvas.grid;
     if (!grid) return null;
-    if (typeof grid.getCenter === "function") {
+    if (typeof grid.getCenterPoint === "function") {
+      const center = grid.getCenterPoint({ x, y });
+      if (center && typeof center.x === "number" && typeof center.y === "number") {
+        return center;
+      }
+    } else if (typeof grid.getCenter === "function") {
       const center = grid.getCenter(x, y);
       if (Array.isArray(center)) {
         return { x: center[0], y: center[1] };
@@ -553,10 +633,14 @@ class MovementHighlighter {
   }
 
   _clearLayers() {
-    const grid = canvas.grid;
-    if (!grid) return;
+    const gridInterface = getGridInterface();
+    if (!gridInterface) return;
     for (const name of Object.values(LAYER_NAMES)) {
-      grid.clearHighlightLayer(name);
+      try {
+        gridInterface.clearHighlightLayer(name);
+      } catch (err) {
+        console.debug(`${MODULE_ID} | Failed to clear highlight layer ${name}`, err);
+      }
     }
   }
 
@@ -629,7 +713,6 @@ Hooks.once("init", () => {
 
 Hooks.once("ready", () => {
   highlighter = new MovementHighlighter();
-  registerKeybindings();
 });
 
 function registerSettings() {

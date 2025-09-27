@@ -12,7 +12,7 @@
       "name": "AI Coding Assistant"
     }
   ],
-  "scripts": [
+  "esmodules": [
     "scripts/main.js"
   ],
   "languages": [
