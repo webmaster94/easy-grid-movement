@@ -753,16 +753,32 @@ class MovementHighlighter {
       const num = Number(value);
       return Number.isFinite(num) ? num : 0;
     };
-    this._neighborOffsets = offsets.map((offset) => {
-      const xValue =
-        offset?.x ?? offset?.i ?? offset?.column ?? offset?.[0] ?? (Array.isArray(offset) ? offset[0] : 0);
-      const yValue =
-        offset?.y ?? offset?.j ?? offset?.row ?? offset?.[1] ?? (Array.isArray(offset) ? offset[1] : 0);
-      return {
-        x: toNumber(xValue),
-        y: toNumber(yValue)
-      };
-    });
+    const resolveComponent = (offset, primaryKey, preferredIndex) => {
+      const candidates = [];
+      if (primaryKey) candidates.push(offset?.[primaryKey]);
+      candidates.push(offset?.i, offset?.j, offset?.column, offset?.row);
+
+      if (preferredIndex !== undefined) {
+        if (Array.isArray(offset)) {
+          candidates.push(offset[preferredIndex]);
+        } else {
+          candidates.push(offset?.[preferredIndex]);
+        }
+      }
+
+      if (Array.isArray(offset)) {
+        candidates.push(offset[0], offset[1]);
+      } else {
+        candidates.push(offset?.[0], offset?.[1]);
+      }
+
+      const candidate = candidates.find((value) => value !== undefined && value !== null);
+      return toNumber(candidate);
+    };
+    this._neighborOffsets = offsets.map((offset) => ({
+      x: resolveComponent(offset, "x", 0),
+      y: resolveComponent(offset, "y", 1)
+    }));
     return this._neighborOffsets;
   }
 
