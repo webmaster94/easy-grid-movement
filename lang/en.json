@@ -30,6 +30,10 @@
       "cellLimit": {
         "Name": "Cell exploration limit",
         "Hint": "Maximum number of grid cells to explore when searching for reachable positions. Higher values may impact performance."
+      },
+      "debugEnabled": {
+        "Name": "Enable debug logging",
+        "Hint": "Write detailed diagnostic information to the browser console to help troubleshoot measurement issues."
       }
     },
     "Notifications": {

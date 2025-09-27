@@ -7,6 +7,35 @@
  * grid API.
  */
 const MODULE_ID = "easy-grid-movement";
+const SETTINGS = {
+  debugEnabled: "debugEnabled"
+};
+
+const formatMessage = (message) => `${MODULE_ID} | ${message}`;
+
+const callConsole = (fn, ...args) => {
+  if (typeof fn === "function") {
+    fn.call(console, ...args);
+  }
+};
+
+const isDebugEnabled = () => {
+  try {
+    return Boolean(game?.settings?.get?.(MODULE_ID, SETTINGS.debugEnabled));
+  } catch (err) {
+    warnLog("Unable to read debug setting", err);
+    return false;
+  }
+};
+
+const debugLog = (message, ...args) => {
+  if (!isDebugEnabled()) return;
+  callConsole(console.debug ?? console.log, formatMessage(message), ...args);
+};
+
+const infoLog = (message, ...args) => callConsole(console.info ?? console.log, formatMessage(message), ...args);
+const warnLog = (message, ...args) => callConsole(console.warn ?? console.log, formatMessage(message), ...args);
+const errorLog = (message, ...args) => callConsole(console.error ?? console.log, formatMessage(message), ...args);
 
 const LAYER_NAMES = {
   normal: `${MODULE_ID}-normal`,
@@ -160,7 +189,7 @@ class MovementHighlighter {
       try {
         this.refresh();
       } catch (err) {
-        console.error(`${MODULE_ID} | Failed to refresh highlights (${reason})`, err);
+        errorLog(`Failed to refresh highlights (${reason})`, err);
       }
     }, 150);
   }
@@ -314,13 +343,13 @@ class MovementHighlighter {
       try {
         startOffset = grid.getOffset(centerPoint, { round: true });
       } catch (err) {
-        console.debug(`${MODULE_ID} | getOffset failed`, err);
+        debugLog("getOffset failed", err);
       }
     } else if (typeof grid.grid?.getOffset === "function") {
       try {
         startOffset = grid.grid.getOffset(centerPoint, { round: true });
       } catch (err) {
-        console.debug(`${MODULE_ID} | inner getOffset failed`, err);
+        debugLog("inner getOffset failed", err);
       }
     }
 
@@ -413,50 +442,50 @@ class MovementHighlighter {
   /**
    * Leverage Foundry's measurement APIs to calculate the cost between cells.
    */
-  _measureSegment(token, from, to) {
-    try {
-      if (typeof token.checkCollision === "function") {
-        const collision = token.checkCollision(to, { type: "move", origin: from, mode: "any" });
-        if (collision) return Infinity;
-      }
-    } catch (err) {
-      console.debug(`${MODULE_ID} | Collision check failed`, err);
-    }
+  _measureSegment(_token, from, to) {
+    const grid = canvas?.grid;
+    const dimensions = canvas?.dimensions;
+    if (!grid || !dimensions) return Infinity;
 
-    const grid = canvas.grid;
-    if (!grid) return Infinity;
-
-    const RayClass = foundry?.canvas?.geometry?.Ray ?? window?.Ray;
+    const RayClass = foundry?.canvas?.geometry?.Ray ?? foundry?.utils?.Ray ?? globalThis.Ray;
     if (!RayClass) return Infinity;
 
     const ray = new RayClass(from, to);
-    const units = Number(canvas.dimensions?.distance ?? canvas.scene?.grid?.distance) || 5;
+    if (!ray) return Infinity;
 
     try {
-      if (typeof grid.measurePath === "function") {
-        const measurement = grid.measurePath({ ray, token, gridSpaces: true });
-        let dist;
-        if (Array.isArray(measurement)) {
-          const entry = measurement[0];
-          dist = typeof entry === "number" ? entry : entry?.distance ?? entry?.gridDistance ?? entry?.totalDistance;
-        } else if (typeof measurement === "number") {
-          dist = measurement;
-        } else if (measurement && typeof measurement === "object") {
-          dist = measurement.distance ?? measurement.gridDistance ?? measurement.totalDistance;
-        }
-        if (Number.isFinite(dist)) return dist * units;
-      }
-
-      if (typeof grid.measureDistances === "function") {
-        const distances = grid.measureDistances([{ ray }], { gridSpaces: true, token });
-        const dist = Number(Array.isArray(distances) ? distances[0] : distances);
-        if (Number.isFinite(dist)) return dist * units;
+      const collision = canvas.walls?.checkCollision?.(ray, { type: "move", mode: "any" });
+      if (collision) {
+        debugLog("Movement blocked by collision", { from, to });
+        return Infinity;
       }
     } catch (err) {
-      console.error(`${MODULE_ID} | Failed to measure segment`, err);
+      debugLog("Collision check failed", err);
+      return Infinity;
     }
 
-    return Infinity;
+    try {
+      const measurement = grid.measurePath([ray.A, ray.B]);
+      if (!measurement || typeof measurement !== "object") {
+        debugLog("measurePath returned invalid result", measurement);
+        return Infinity;
+      }
+
+      const unitDistance = Number(dimensions.distance) || 5;
+      if (Number.isFinite(measurement.spaces) && measurement.spaces > 0) {
+        return measurement.spaces * unitDistance;
+      }
+
+      if (Number.isFinite(measurement.distance)) {
+        return measurement.distance;
+      }
+
+      debugLog("measurePath result missing distance", measurement);
+      return Infinity;
+    } catch (err) {
+      errorLog("Failed to measure segment", err);
+      return Infinity;
+    }
   }
 
   /**
@@ -497,7 +526,7 @@ class MovementHighlighter {
       try {
         layer = gridInterface.addHighlightLayer(name);
       } catch (err) {
-        console.error(`${MODULE_ID} | Failed to add highlight layer ${name}`, err);
+        errorLog(`Failed to add highlight layer ${name}`, err);
       }
     }
     if (layer) layer.alpha = alpha;
@@ -530,7 +559,7 @@ class MovementHighlighter {
         layer.drawPolygon(shape);
         layer.endFill();
       } catch (drawErr) {
-        console.error(`${MODULE_ID} | Failed to draw highlight`, drawErr);
+        errorLog("Failed to draw highlight", drawErr);
       }
     }
   }
@@ -683,7 +712,7 @@ class MovementHighlighter {
       try {
         offsets = grid.getAdjacentOffsets();
       } catch (err) {
-        console.debug(`${MODULE_ID} | getAdjacentOffsets failed`, err);
+        debugLog("getAdjacentOffsets failed", err);
       }
     }
     if (!Array.isArray(offsets) || !offsets.length) {
@@ -715,7 +744,7 @@ class MovementHighlighter {
       try {
         gridInterface.clearHighlightLayer(name);
       } catch (err) {
-        console.debug(`${MODULE_ID} | Failed to clear highlight layer ${name}`, err);
+        debugLog(`Failed to clear highlight layer ${name}`, err);
       }
     }
   }
@@ -855,6 +884,22 @@ function registerSettings() {
     default: DEFAULTS.cellLimit,
     range: { min: 500, max: 20000, step: 100 },
     onChange: () => highlighter?.onSettingsChanged()
+  });
+
+  game.settings.register(MODULE_ID, SETTINGS.debugEnabled, {
+    name: game.i18n.localize("EGM.Settings.debugEnabled.Name"),
+    hint: game.i18n.localize("EGM.Settings.debugEnabled.Hint"),
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: false,
+    onChange: (value) => {
+      if (value) {
+        infoLog("Debug logging enabled");
+      } else {
+        infoLog("Debug logging disabled");
+      }
+    }
   });
 }
 
