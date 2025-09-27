@@ -7,6 +7,35 @@
  * grid API.
  */
 const MODULE_ID = "easy-grid-movement";
+const SETTINGS = {
+  debugEnabled: "debugEnabled"
+};
+
+const formatMessage = (message) => `${MODULE_ID} | ${message}`;
+
+const callConsole = (fn, ...args) => {
+  if (typeof fn === "function") {
+    fn.call(console, ...args);
+  }
+};
+
+const isDebugEnabled = () => {
+  try {
+    return Boolean(game?.settings?.get?.(MODULE_ID, SETTINGS.debugEnabled));
+  } catch (err) {
+    warnLog("Unable to read debug setting", err);
+    return false;
+  }
+};
+
+const debugLog = (message, ...args) => {
+  if (!isDebugEnabled()) return;
+  callConsole(console.debug ?? console.log, formatMessage(message), ...args);
+};
+
+const infoLog = (message, ...args) => callConsole(console.info ?? console.log, formatMessage(message), ...args);
+const warnLog = (message, ...args) => callConsole(console.warn ?? console.log, formatMessage(message), ...args);
+const errorLog = (message, ...args) => callConsole(console.error ?? console.log, formatMessage(message), ...args);
 
 const LAYER_NAMES = {
   normal: `${MODULE_ID}-normal`,
@@ -160,7 +189,7 @@ class MovementHighlighter {
       try {
         this.refresh();
       } catch (err) {
-        console.error(`${MODULE_ID} | Failed to refresh highlights (${reason})`, err);
+        errorLog(`Failed to refresh highlights (${reason})`, err);
       }
     }, 150);
   }
@@ -314,13 +343,13 @@ class MovementHighlighter {
       try {
         startOffset = grid.getOffset(centerPoint, { round: true });
       } catch (err) {
-        console.debug(`${MODULE_ID} | getOffset failed`, err);
+        debugLog("getOffset failed", err);
       }
     } else if (typeof grid.grid?.getOffset === "function") {
       try {
         startOffset = grid.grid.getOffset(centerPoint, { round: true });
       } catch (err) {
-        console.debug(`${MODULE_ID} | inner getOffset failed`, err);
+        debugLog("inner getOffset failed", err);
       }
     }
 
@@ -420,7 +449,7 @@ class MovementHighlighter {
         if (collision) return Infinity;
       }
     } catch (err) {
-      console.debug(`${MODULE_ID} | Collision check failed`, err);
+      debugLog("Collision check failed", err);
     }
 
     const grid = canvas.grid;
@@ -478,26 +507,57 @@ class MovementHighlighter {
     let gridSpaces;
     let lastError;
 
-    if (typeof grid.measurePath === "function") {
-      try {
-        const measurement = grid.measurePath.length > 1
-          ? grid.measurePath(ray, baseOptions)
-          : grid.measurePath({ ...baseOptions, ray });
-        gridSpaces = parseDistance(measurement);
-      } catch (err) {
-        lastError = err;
-        console.debug(`${MODULE_ID} | measurePath failed, falling back`, err);
+    const hasMeasurePath = typeof grid.measurePath === "function";
+    if (hasMeasurePath) {
+      const attempts = [
+        () => grid.measurePath({ ...baseOptions, ray })
+      ];
+      attempts.push(() => grid.measurePath(ray, baseOptions));
+      attempts.push(() => grid.measurePath([{ ray }], baseOptions));
+      attempts.push(() => grid.measurePath([ray], baseOptions));
+      attempts.push(() => grid.measurePath([ray]));
+
+      for (const attempt of attempts) {
+        try {
+          const measurement = attempt();
+          gridSpaces = parseDistance(measurement);
+          if (Number.isFinite(gridSpaces)) {
+            debugLog(
+              "measurePath succeeded (%o -> %o) => %s",
+              from,
+              to,
+              gridSpaces
+            );
+            break;
+          }
+          debugLog("measurePath attempt returned non-numeric result", measurement);
+        } catch (err) {
+          lastError = err;
+          debugLog("measurePath attempt failed", err);
+        }
       }
     }
 
-    if (!Number.isFinite(gridSpaces) && typeof grid.measureDistances === "function") {
+    if (
+      !Number.isFinite(gridSpaces) &&
+      !hasMeasurePath &&
+      typeof grid.measureDistances === "function"
+    ) {
       try {
         const segments = [{ ray, from, to, token }];
         const distances = grid.measureDistances(segments, baseOptions);
         gridSpaces = parseDistance(distances);
+        if (Number.isFinite(gridSpaces)) {
+          debugLog(
+            "measureDistances succeeded (%o -> %o) => %s",
+            from,
+            to,
+            gridSpaces
+          );
+        }
       } catch (err) {
         lastError = err;
-        console.debug(`${MODULE_ID} | measureDistances failed, falling back`, err);
+        debugLog("measureDistances failed", err);
       }
     }
 
@@ -505,9 +565,17 @@ class MovementHighlighter {
       try {
         const distance = grid.measureDistance(from, to, baseOptions);
         gridSpaces = parseDistance(distance);
+        if (Number.isFinite(gridSpaces)) {
+          debugLog(
+            "measureDistance succeeded (%o -> %o) => %s",
+            from,
+            to,
+            gridSpaces
+          );
+        }
       } catch (err) {
         lastError = err;
-        console.debug(`${MODULE_ID} | measureDistance failed, falling back`, err);
+        debugLog("measureDistance failed", err);
       }
     }
 
@@ -515,9 +583,17 @@ class MovementHighlighter {
       try {
         const distance = canvas.grid.measureDistance(from, to, baseOptions);
         gridSpaces = parseDistance(distance);
+        if (Number.isFinite(gridSpaces)) {
+          debugLog(
+            "canvas.grid.measureDistance succeeded (%o -> %o) => %s",
+            from,
+            to,
+            gridSpaces
+          );
+        }
       } catch (err) {
         lastError = err;
-        console.debug(`${MODULE_ID} | canvas.grid.measureDistance failed, falling back`, err);
+        debugLog("canvas.grid.measureDistance failed", err);
       }
     }
 
@@ -527,11 +603,17 @@ class MovementHighlighter {
 
     const estimated = this._estimateGridDistance(from, to);
     if (Number.isFinite(estimated)) {
+      debugLog(
+        "Using heuristic measurement (%o -> %o) => %s",
+        from,
+        to,
+        estimated
+      );
       return estimated * units;
     }
 
     if (lastError) {
-      console.error(`${MODULE_ID} | Failed to measure segment`, lastError);
+      errorLog("Failed to measure segment", lastError);
     }
 
     return Infinity;
@@ -611,7 +693,7 @@ class MovementHighlighter {
       try {
         layer = gridInterface.addHighlightLayer(name);
       } catch (err) {
-        console.error(`${MODULE_ID} | Failed to add highlight layer ${name}`, err);
+        errorLog(`Failed to add highlight layer ${name}`, err);
       }
     }
     if (layer) layer.alpha = alpha;
@@ -644,7 +726,7 @@ class MovementHighlighter {
         layer.drawPolygon(shape);
         layer.endFill();
       } catch (drawErr) {
-        console.error(`${MODULE_ID} | Failed to draw highlight`, drawErr);
+        errorLog("Failed to draw highlight", drawErr);
       }
     }
   }
@@ -797,7 +879,7 @@ class MovementHighlighter {
       try {
         offsets = grid.getAdjacentOffsets();
       } catch (err) {
-        console.debug(`${MODULE_ID} | getAdjacentOffsets failed`, err);
+        debugLog("getAdjacentOffsets failed", err);
       }
     }
     if (!Array.isArray(offsets) || !offsets.length) {
@@ -829,7 +911,7 @@ class MovementHighlighter {
       try {
         gridInterface.clearHighlightLayer(name);
       } catch (err) {
-        console.debug(`${MODULE_ID} | Failed to clear highlight layer ${name}`, err);
+        debugLog(`Failed to clear highlight layer ${name}`, err);
       }
     }
   }
@@ -969,6 +1051,22 @@ function registerSettings() {
     default: DEFAULTS.cellLimit,
     range: { min: 500, max: 20000, step: 100 },
     onChange: () => highlighter?.onSettingsChanged()
+  });
+
+  game.settings.register(MODULE_ID, SETTINGS.debugEnabled, {
+    name: game.i18n.localize("EGM.Settings.debugEnabled.Name"),
+    hint: game.i18n.localize("EGM.Settings.debugEnabled.Hint"),
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: false,
+    onChange: (value) => {
+      if (value) {
+        infoLog("Debug logging enabled");
+      } else {
+        infoLog("Debug logging disabled");
+      }
+    }
   });
 }
 
