@@ -442,193 +442,50 @@ class MovementHighlighter {
   /**
    * Leverage Foundry's measurement APIs to calculate the cost between cells.
    */
-  _measureSegment(token, from, to) {
-    try {
-      if (typeof token.checkCollision === "function") {
-        const collision = token.checkCollision(to, { type: "move", origin: from, mode: "any" });
-        if (collision) return Infinity;
-      }
-    } catch (err) {
-      debugLog("Collision check failed", err);
-    }
+  _measureSegment(_token, from, to) {
+    const grid = canvas?.grid;
+    const dimensions = canvas?.dimensions;
+    if (!grid || !dimensions) return Infinity;
 
-    const grid = canvas.grid;
-    if (!grid) return Infinity;
-
-    const RayClass =
-      foundry?.canvas?.geometry?.Ray ??
-      foundry?.utils?.Ray ??
-      window?.Ray;
+    const RayClass = foundry?.canvas?.geometry?.Ray ?? foundry?.utils?.Ray ?? globalThis.Ray;
     if (!RayClass) return Infinity;
 
     const ray = new RayClass(from, to);
-    if (ray && typeof ray === "object") {
-      try {
-        if (!("i" in ray)) ray.i = 0;
-      } catch (err) {
-        debugLog("Failed to assign ray index", err);
+    if (!ray) return Infinity;
+
+    try {
+      const collision = canvas.walls?.checkCollision?.(ray, { type: "move", mode: "any" });
+      if (collision) {
+        debugLog("Movement blocked by collision", { from, to });
+        return Infinity;
       }
+    } catch (err) {
+      debugLog("Collision check failed", err);
+      return Infinity;
     }
-    const segmentDescriptor = {
-      ray,
-      from,
-      to,
-      token,
-      i: 0,
-      distance: Number(ray?.distance) || Math.hypot(ray?.dx ?? 0, ray?.dy ?? 0)
-    };
-    const units = Number(canvas.dimensions?.distance ?? canvas.scene?.grid?.distance) || 5;
 
-    const parseDistance = (measurement) => {
-      if (typeof measurement === "number") return measurement;
-      if (Array.isArray(measurement)) {
-        for (const entry of measurement) {
-          const parsed = parseDistance(entry);
-          if (Number.isFinite(parsed)) return parsed;
-        }
-        return undefined;
+    try {
+      const measurement = grid.measurePath([ray.A, ray.B]);
+      if (!measurement || typeof measurement !== "object") {
+        debugLog("measurePath returned invalid result", measurement);
+        return Infinity;
       }
-      if (measurement && typeof measurement === "object") {
-        const candidates = [
-          measurement.distance,
-          measurement.gridDistance,
-          measurement.totalDistance,
-          measurement.value,
-          measurement.measure,
-          measurement.length,
-          measurement.spaces,
-          measurement.cells
-        ];
-        for (const candidate of candidates) {
-          const numeric = typeof candidate === "number" ? candidate : Number(candidate);
-          if (Number.isFinite(numeric)) return numeric;
-        }
-        return undefined;
+
+      const unitDistance = Number(dimensions.distance) || 5;
+      if (Number.isFinite(measurement.spaces) && measurement.spaces > 0) {
+        return measurement.spaces * unitDistance;
       }
-      return undefined;
-    };
 
-    const baseOptions = {
-      token,
-      gridSpaces: true,
-      // Provide both naming conventions so whichever Foundry build is in use
-      // can derive offsets without throwing errors.
-      origin: from,
-      destination: to,
-      from,
-      to
-    };
-
-    let gridSpaces;
-    let lastError;
-
-    const hasMeasurePath = typeof grid.measurePath === "function";
-    if (hasMeasurePath) {
-      const attempts = [
-        () => grid.measurePath([segmentDescriptor], baseOptions),
-        () => grid.measurePath({ ...baseOptions, ray }),
-        () => grid.measurePath(ray, baseOptions),
-        () => grid.measurePath([{ ray }], baseOptions),
-        () => grid.measurePath([ray], baseOptions),
-        () => grid.measurePath([ray])
-      ];
-
-      for (const attempt of attempts) {
-        try {
-          const measurement = attempt();
-          gridSpaces = parseDistance(measurement);
-          if (Number.isFinite(gridSpaces)) {
-            debugLog(
-              "measurePath succeeded (%o -> %o) => %s",
-              from,
-              to,
-              gridSpaces
-            );
-            break;
-          }
-          debugLog("measurePath attempt returned non-numeric result", measurement);
-        } catch (err) {
-          lastError = err;
-          debugLog("measurePath attempt failed", err);
-        }
+      if (Number.isFinite(measurement.distance)) {
+        return measurement.distance;
       }
-    }
 
-    if (!Number.isFinite(gridSpaces) && typeof grid.measureDistances === "function") {
-      try {
-        const segments = [segmentDescriptor];
-        const distances = grid.measureDistances(segments, baseOptions);
-        gridSpaces = parseDistance(distances);
-        if (Number.isFinite(gridSpaces)) {
-          debugLog(
-            "measureDistances succeeded (%o -> %o) => %s",
-            from,
-            to,
-            gridSpaces
-          );
-        }
-      } catch (err) {
-        lastError = err;
-        debugLog("measureDistances failed", err);
-      }
+      debugLog("measurePath result missing distance", measurement);
+      return Infinity;
+    } catch (err) {
+      errorLog("Failed to measure segment", err);
+      return Infinity;
     }
-
-    if (!Number.isFinite(gridSpaces) && typeof grid.measureDistance === "function") {
-      try {
-        const distance = grid.measureDistance(from, to, baseOptions);
-        gridSpaces = parseDistance(distance);
-        if (Number.isFinite(gridSpaces)) {
-          debugLog(
-            "measureDistance succeeded (%o -> %o) => %s",
-            from,
-            to,
-            gridSpaces
-          );
-        }
-      } catch (err) {
-        lastError = err;
-        debugLog("measureDistance failed", err);
-      }
-    }
-
-    if (!Number.isFinite(gridSpaces) && typeof canvas.grid?.measureDistance === "function" && canvas.grid.measureDistance !== grid.measureDistance) {
-      try {
-        const distance = canvas.grid.measureDistance(from, to, baseOptions);
-        gridSpaces = parseDistance(distance);
-        if (Number.isFinite(gridSpaces)) {
-          debugLog(
-            "canvas.grid.measureDistance succeeded (%o -> %o) => %s",
-            from,
-            to,
-            gridSpaces
-          );
-        }
-      } catch (err) {
-        lastError = err;
-        debugLog("canvas.grid.measureDistance failed", err);
-      }
-    }
-
-    if (Number.isFinite(gridSpaces)) {
-      return gridSpaces * units;
-    }
-
-    const estimated = this._estimateGridDistance(from, to);
-    if (Number.isFinite(estimated)) {
-      debugLog(
-        "Using heuristic measurement (%o -> %o) => %s",
-        from,
-        to,
-        estimated
-      );
-      return estimated * units;
-    }
-
-    if (lastError) {
-      errorLog("Failed to measure segment", lastError);
-    }
-
-    return Infinity;
   }
 
   _estimateGridDistance(from, to) {
