@@ -1,0 +1,28 @@
+{
+  "id": "easy-grid-movement",
+  "title": "Easy Grid Movement",
+  "description": "Highlights grid squares reachable by controlled tokens for normal and dash movement.",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13"
+  },
+  "authors": [
+    {
+      "name": "AI Coding Assistant"
+    }
+  ],
+  "scripts": [
+    "scripts/main.js"
+  ],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    }
+  ],
+  "manifest": "",
+  "download": "",
+  "url": ""
+}
