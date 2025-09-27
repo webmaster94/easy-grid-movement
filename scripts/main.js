@@ -624,6 +624,7 @@ let highlighter;
 
 Hooks.once("init", () => {
   registerSettings();
+  registerKeybindings();
 });
 
 Hooks.once("ready", () => {
