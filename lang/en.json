@@ -1,0 +1,42 @@
+{
+  "EGM": {
+    "Keybinding": {
+      "Toggle": {
+        "Name": "Toggle movement highlight",
+        "Hint": "Show or hide reachable squares for the controlled token."
+      }
+    },
+    "Settings": {
+      "normalColor": {
+        "Name": "Normal movement color",
+        "Hint": "Hex color used to tint squares within the creature's normal movement budget."
+      },
+      "dashColor": {
+        "Name": "Dash movement color",
+        "Hint": "Hex color used to tint squares that require a Dash action to reach."
+      },
+      "highlightAlpha": {
+        "Name": "Highlight opacity",
+        "Hint": "Alpha value (0-1) applied to the movement highlights. Lower values are more transparent."
+      },
+      "multiMode": {
+        "Name": "Multiple token mode",
+        "Hint": "Highlight either the first controlled token or every controlled token.",
+        "Choices": {
+          "first": "First controlled token",
+          "all": "All controlled tokens"
+        }
+      },
+      "cellLimit": {
+        "Name": "Cell exploration limit",
+        "Hint": "Maximum number of grid cells to explore when searching for reachable positions. Higher values may impact performance."
+      }
+    },
+    "Notifications": {
+      "NoToken": "No controlled token to measure movement for.",
+      "Gridless": "Gridless scenes are not supported for movement highlighting.",
+      "NoSpeed": "The selected token has no movement speed configured.",
+      "LimitReached": "Cell exploration limit reached before exhausting the dash distance. Results may be incomplete."
+    }
+  }
+}
