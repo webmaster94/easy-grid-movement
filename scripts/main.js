@@ -14,7 +14,6 @@ const DEFAULTS = {
 };
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
-
 const getGridInterface = () => canvas?.interface?.grid ?? canvas?.grid ?? null;
 
 class PriorityQueue {
@@ -290,6 +289,7 @@ class MovementHighlighter {
           startOffset?.x ?? startOffset?.i ?? startOffset?.column ?? centerPoint.x / size,
           startOffset?.y ?? startOffset?.j ?? startOffset?.row ?? centerPoint.y / size
         ];
+
     const start = {
       x: Math.round(startXRaw),
       y: Math.round(startYRaw)
@@ -415,7 +415,6 @@ class MovementHighlighter {
 
     const highlightAlpha = Number(game.settings.get(MODULE_ID, "highlightAlpha"));
     const alpha = Number.isFinite(highlightAlpha) ? clamp(highlightAlpha, 0, 1) : DEFAULTS.highlightAlpha;
-
     gridInterface.clearHighlightLayer(LAYER_NAMES.normal);
     gridInterface.clearHighlightLayer(LAYER_NAMES.dash);
 
@@ -528,6 +527,7 @@ class MovementHighlighter {
     if (!topLeft) {
       topLeft = [x * size, y * size];
     }
+
     return [
       topLeft[0],
       topLeft[1],
