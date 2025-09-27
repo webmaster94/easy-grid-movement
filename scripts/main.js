@@ -426,7 +426,10 @@ class MovementHighlighter {
     const grid = canvas.grid;
     if (!grid) return Infinity;
 
-    const RayClass = foundry?.canvas?.geometry?.Ray ?? window?.Ray;
+    const RayClass =
+      foundry?.canvas?.geometry?.Ray ??
+      foundry?.utils?.Ray ??
+      window?.Ray;
     if (!RayClass) return Infinity;
 
     const ray = new RayClass(from, to);
@@ -434,7 +437,21 @@ class MovementHighlighter {
 
     try {
       if (typeof grid.measurePath === "function") {
-        const measurement = grid.measurePath({ ray, token, gridSpaces: true });
+        const pathConfig = {
+          ray,
+          token,
+          gridSpaces: true,
+          // Different Foundry builds expect either origin/destination or from/to
+          // data when deriving grid offsets. Provide both so whichever variant
+          // is available can operate without throwing.
+          origin: from,
+          destination: to,
+          from,
+          to
+        };
+        const measurement = grid.measurePath.length > 1
+          ? grid.measurePath(ray, pathConfig)
+          : grid.measurePath(pathConfig);
         let dist;
         if (Array.isArray(measurement)) {
           const entry = measurement[0];
@@ -448,7 +465,8 @@ class MovementHighlighter {
       }
 
       if (typeof grid.measureDistances === "function") {
-        const distances = grid.measureDistances([{ ray }], { gridSpaces: true, token });
+        const segments = [{ ray, from, to, token }];
+        const distances = grid.measureDistances(segments, { gridSpaces: true, token, from, to });
         const dist = Number(Array.isArray(distances) ? distances[0] : distances);
         if (Number.isFinite(dist)) return dist * units;
       }
