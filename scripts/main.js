@@ -629,6 +629,7 @@ Hooks.once("init", () => {
 
 Hooks.once("ready", () => {
   highlighter = new MovementHighlighter();
+  registerKeybindings();
 });
 
 function registerSettings() {
