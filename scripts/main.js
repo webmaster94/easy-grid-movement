@@ -749,7 +749,26 @@ class MovementHighlighter {
         { x: -1, y: 1 }
       ];
     }
-    this._neighborOffsets = offsets.map((o) => ({ x: o.x ?? o[0] ?? 0, y: o.y ?? o[1] ?? 0 }));
+    const toNumber = (value) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : 0;
+    };
+    const getValue = (offset, keys, index) => {
+      if (!offset) return 0;
+      for (const key of keys) {
+        const candidate = offset?.[key];
+        if (candidate !== undefined && candidate !== null) return candidate;
+      }
+      if (Array.isArray(offset)) {
+        const candidate = offset[index];
+        if (candidate !== undefined && candidate !== null) return candidate;
+      }
+      return 0;
+    };
+    this._neighborOffsets = offsets.map((offset) => ({
+      x: toNumber(getValue(offset, ["x", "i", "column"], 0)),
+      y: toNumber(getValue(offset, ["y", "j", "row"], 1))
+    }));
     return this._neighborOffsets;
   }
 
