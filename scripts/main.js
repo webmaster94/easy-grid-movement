@@ -462,6 +462,21 @@ class MovementHighlighter {
     if (!RayClass) return Infinity;
 
     const ray = new RayClass(from, to);
+    if (ray && typeof ray === "object") {
+      try {
+        if (!("i" in ray)) ray.i = 0;
+      } catch (err) {
+        debugLog("Failed to assign ray index", err);
+      }
+    }
+    const segmentDescriptor = {
+      ray,
+      from,
+      to,
+      token,
+      i: 0,
+      distance: Number(ray?.distance) || Math.hypot(ray?.dx ?? 0, ray?.dy ?? 0)
+    };
     const units = Number(canvas.dimensions?.distance ?? canvas.scene?.grid?.distance) || 5;
 
     const parseDistance = (measurement) => {
@@ -510,12 +525,13 @@ class MovementHighlighter {
     const hasMeasurePath = typeof grid.measurePath === "function";
     if (hasMeasurePath) {
       const attempts = [
-        () => grid.measurePath({ ...baseOptions, ray })
+        () => grid.measurePath([segmentDescriptor], baseOptions),
+        () => grid.measurePath({ ...baseOptions, ray }),
+        () => grid.measurePath(ray, baseOptions),
+        () => grid.measurePath([{ ray }], baseOptions),
+        () => grid.measurePath([ray], baseOptions),
+        () => grid.measurePath([ray])
       ];
-      attempts.push(() => grid.measurePath(ray, baseOptions));
-      attempts.push(() => grid.measurePath([{ ray }], baseOptions));
-      attempts.push(() => grid.measurePath([ray], baseOptions));
-      attempts.push(() => grid.measurePath([ray]));
 
       for (const attempt of attempts) {
         try {
@@ -538,13 +554,9 @@ class MovementHighlighter {
       }
     }
 
-    if (
-      !Number.isFinite(gridSpaces) &&
-      !hasMeasurePath &&
-      typeof grid.measureDistances === "function"
-    ) {
+    if (!Number.isFinite(gridSpaces) && typeof grid.measureDistances === "function") {
       try {
-        const segments = [{ ray, from, to, token }];
+        const segments = [segmentDescriptor];
         const distances = grid.measureDistances(segments, baseOptions);
         gridSpaces = parseDistance(distances);
         if (Number.isFinite(gridSpaces)) {
