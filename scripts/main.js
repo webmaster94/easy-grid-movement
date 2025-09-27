@@ -435,46 +435,142 @@ class MovementHighlighter {
     const ray = new RayClass(from, to);
     const units = Number(canvas.dimensions?.distance ?? canvas.scene?.grid?.distance) || 5;
 
-    try {
-      if (typeof grid.measurePath === "function") {
-        const pathConfig = {
-          ray,
-          token,
-          gridSpaces: true,
-          // Different Foundry builds expect either origin/destination or from/to
-          // data when deriving grid offsets. Provide both so whichever variant
-          // is available can operate without throwing.
-          origin: from,
-          destination: to,
-          from,
-          to
-        };
-        const measurement = grid.measurePath.length > 1
-          ? grid.measurePath(ray, pathConfig)
-          : grid.measurePath(pathConfig);
-        let dist;
-        if (Array.isArray(measurement)) {
-          const entry = measurement[0];
-          dist = typeof entry === "number" ? entry : entry?.distance ?? entry?.gridDistance ?? entry?.totalDistance;
-        } else if (typeof measurement === "number") {
-          dist = measurement;
-        } else if (measurement && typeof measurement === "object") {
-          dist = measurement.distance ?? measurement.gridDistance ?? measurement.totalDistance;
+    const parseDistance = (measurement) => {
+      if (typeof measurement === "number") return measurement;
+      if (Array.isArray(measurement)) {
+        for (const entry of measurement) {
+          const parsed = parseDistance(entry);
+          if (Number.isFinite(parsed)) return parsed;
         }
-        if (Number.isFinite(dist)) return dist * units;
+        return undefined;
       }
+      if (measurement && typeof measurement === "object") {
+        const candidates = [
+          measurement.distance,
+          measurement.gridDistance,
+          measurement.totalDistance,
+          measurement.value,
+          measurement.measure,
+          measurement.length,
+          measurement.spaces,
+          measurement.cells
+        ];
+        for (const candidate of candidates) {
+          const numeric = typeof candidate === "number" ? candidate : Number(candidate);
+          if (Number.isFinite(numeric)) return numeric;
+        }
+        return undefined;
+      }
+      return undefined;
+    };
 
-      if (typeof grid.measureDistances === "function") {
-        const segments = [{ ray, from, to, token }];
-        const distances = grid.measureDistances(segments, { gridSpaces: true, token, from, to });
-        const dist = Number(Array.isArray(distances) ? distances[0] : distances);
-        if (Number.isFinite(dist)) return dist * units;
+    const baseOptions = {
+      token,
+      gridSpaces: true,
+      // Provide both naming conventions so whichever Foundry build is in use
+      // can derive offsets without throwing errors.
+      origin: from,
+      destination: to,
+      from,
+      to
+    };
+
+    let gridSpaces;
+    let lastError;
+
+    if (typeof grid.measurePath === "function") {
+      try {
+        const measurement = grid.measurePath.length > 1
+          ? grid.measurePath(ray, baseOptions)
+          : grid.measurePath({ ...baseOptions, ray });
+        gridSpaces = parseDistance(measurement);
+      } catch (err) {
+        lastError = err;
+        console.debug(`${MODULE_ID} | measurePath failed, falling back`, err);
       }
-    } catch (err) {
-      console.error(`${MODULE_ID} | Failed to measure segment`, err);
+    }
+
+    if (!Number.isFinite(gridSpaces) && typeof grid.measureDistances === "function") {
+      try {
+        const segments = [{ ray, from, to, token }];
+        const distances = grid.measureDistances(segments, baseOptions);
+        gridSpaces = parseDistance(distances);
+      } catch (err) {
+        lastError = err;
+        console.debug(`${MODULE_ID} | measureDistances failed, falling back`, err);
+      }
+    }
+
+    if (!Number.isFinite(gridSpaces) && typeof grid.measureDistance === "function") {
+      try {
+        const distance = grid.measureDistance(from, to, baseOptions);
+        gridSpaces = parseDistance(distance);
+      } catch (err) {
+        lastError = err;
+        console.debug(`${MODULE_ID} | measureDistance failed, falling back`, err);
+      }
+    }
+
+    if (!Number.isFinite(gridSpaces) && typeof canvas.grid?.measureDistance === "function" && canvas.grid.measureDistance !== grid.measureDistance) {
+      try {
+        const distance = canvas.grid.measureDistance(from, to, baseOptions);
+        gridSpaces = parseDistance(distance);
+      } catch (err) {
+        lastError = err;
+        console.debug(`${MODULE_ID} | canvas.grid.measureDistance failed, falling back`, err);
+      }
+    }
+
+    if (Number.isFinite(gridSpaces)) {
+      return gridSpaces * units;
+    }
+
+    const estimated = this._estimateGridDistance(from, to);
+    if (Number.isFinite(estimated)) {
+      return estimated * units;
+    }
+
+    if (lastError) {
+      console.error(`${MODULE_ID} | Failed to measure segment`, lastError);
     }
 
     return Infinity;
+  }
+
+  _estimateGridDistance(from, to) {
+    const size = Number(canvas.dimensions?.size);
+    if (!Number.isFinite(size) || size <= 0) return undefined;
+
+    const dx = Math.abs((to?.x ?? 0) - (from?.x ?? 0)) / size;
+    const dy = Math.abs((to?.y ?? 0) - (from?.y ?? 0)) / size;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return undefined;
+
+    const rules = CONST?.GRID_DIAGONAL_RULES ?? {};
+    const rule = canvas.grid?.diagonalRule ?? canvas.scene?.grid?.diagonalRule;
+
+    const matchesRule = (...candidates) => candidates.some((candidate) => candidate !== undefined && candidate === rule);
+
+    if (matchesRule(rules.MANHATTAN, "MANHATTAN")) {
+      return dx + dy;
+    }
+
+    if (matchesRule(rules.EUCLIDEAN, "EUCLIDEAN")) {
+      return Math.hypot(dx, dy);
+    }
+
+    if (matchesRule(rules.ROOFTOP, "ROOFTOP")) {
+      return Math.max(dx, dy);
+    }
+
+    if (matchesRule(rules.APPROXIMATION, "APPROXIMATION", "5105")) {
+      const diagonals = Math.min(dx, dy);
+      const straights = Math.abs(dx - dy);
+      return diagonals + straights + Math.floor(diagonals / 2);
+    }
+
+    const diagonals = Math.min(dx, dy);
+    const straights = Math.abs(dx - dy);
+    return diagonals + straights;
   }
 
   /**
