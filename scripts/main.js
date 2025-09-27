@@ -379,7 +379,7 @@ class MovementHighlighter {
     };
 
     // Grid specific neighbour data (including diagonals) drives the search fan-out.
-    const offsets = this._getNeighborOffsets();
+    const offsets = this._getNeighborOffsets(start);
     if (!offsets.length) return { normal, dash, limitHit: false };
 
     const frontier = new PriorityQueue((a, b) => a.cost - b.cost);
@@ -486,42 +486,6 @@ class MovementHighlighter {
       errorLog("Failed to measure segment", err);
       return Infinity;
     }
-  }
-
-  _estimateGridDistance(from, to) {
-    const size = Number(canvas.dimensions?.size);
-    if (!Number.isFinite(size) || size <= 0) return undefined;
-
-    const dx = Math.abs((to?.x ?? 0) - (from?.x ?? 0)) / size;
-    const dy = Math.abs((to?.y ?? 0) - (from?.y ?? 0)) / size;
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return undefined;
-
-    const rules = CONST?.GRID_DIAGONAL_RULES ?? {};
-    const rule = canvas.grid?.diagonalRule ?? canvas.scene?.grid?.diagonalRule;
-
-    const matchesRule = (...candidates) => candidates.some((candidate) => candidate !== undefined && candidate === rule);
-
-    if (matchesRule(rules.MANHATTAN, "MANHATTAN")) {
-      return dx + dy;
-    }
-
-    if (matchesRule(rules.EUCLIDEAN, "EUCLIDEAN")) {
-      return Math.hypot(dx, dy);
-    }
-
-    if (matchesRule(rules.ROOFTOP, "ROOFTOP")) {
-      return Math.max(dx, dy);
-    }
-
-    if (matchesRule(rules.APPROXIMATION, "APPROXIMATION", "5105")) {
-      const diagonals = Math.min(dx, dy);
-      const straights = Math.abs(dx - dy);
-      return diagonals + straights + Math.floor(diagonals / 2);
-    }
-
-    const diagonals = Math.min(dx, dy);
-    const straights = Math.abs(dx - dy);
-    return diagonals + straights;
   }
 
   /**
@@ -740,15 +704,37 @@ class MovementHighlighter {
   /**
    * Retrieve the neighbour offsets used to explore adjacent cells.
    */
-  _getNeighborOffsets() {
+  _getNeighborOffsets(origin) {
     if (this._neighborOffsets && this._neighborOffsets.length) return this._neighborOffsets;
     const grid = canvas.grid;
     let offsets = [];
     if (typeof grid?.getAdjacentOffsets === "function") {
-      try {
-        offsets = grid.getAdjacentOffsets();
-      } catch (err) {
-        debugLog("getAdjacentOffsets failed", err);
+      const originData = origin ?? { x: 0, y: 0 };
+      const normalizedOrigin = originData
+        ? {
+            i: originData.i ?? originData.x ?? originData.column ?? 0,
+            j: originData.j ?? originData.y ?? originData.row ?? 0,
+            x: originData.x ?? originData.i ?? originData.column ?? 0,
+            y: originData.y ?? originData.j ?? originData.row ?? 0,
+            column: originData.column ?? originData.x ?? originData.i ?? 0,
+            row: originData.row ?? originData.y ?? originData.j ?? 0
+          }
+        : undefined;
+
+      if (normalizedOrigin) {
+        try {
+          offsets = grid.getAdjacentOffsets({ origin: normalizedOrigin });
+        } catch (err) {
+          debugLog("getAdjacentOffsets with origin failed", err);
+        }
+      }
+
+      if (!Array.isArray(offsets) || !offsets.length) {
+        try {
+          offsets = grid.getAdjacentOffsets();
+        } catch (err) {
+          debugLog("getAdjacentOffsets failed", err);
+        }
       }
     }
     if (!Array.isArray(offsets) || !offsets.length) {
