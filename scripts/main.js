@@ -239,16 +239,37 @@ class EasyGridMovement {
     if (typeof token.constrainMovementPath === "function") {
       try {
         const constrained = token.constrainMovementPath(path, { preview: false });
-        if (Array.isArray(constrained) && constrained.length >= 2) {
-          const last = constrained[constrained.length - 1];
-          if (
-            last &&
-            Math.abs(last.x - to.x) <= 0.5 &&
-            Math.abs(last.y - to.y) <= 0.5
-          ) {
-            path = constrained;
+        let collision = false;
+        let extracted = null;
+
+        if (Array.isArray(constrained)) {
+          if (Array.isArray(constrained[0])) {
+            extracted = constrained[0];
+            collision = Boolean(constrained[1]);
           } else {
-            debugLog("constrained path deviated", constrained);
+            extracted = constrained;
+          }
+        } else if (constrained && typeof constrained === "object") {
+          if (Array.isArray(constrained.waypoints)) extracted = constrained.waypoints;
+          collision = Boolean(constrained.collision);
+        }
+
+        if (collision) {
+          debugLog("constrained path blocked", constrained);
+          return Infinity;
+        }
+
+        if (Array.isArray(extracted) && extracted.length >= 2) {
+          const last = extracted[extracted.length - 1];
+          if (last && this._pointsRoughlyEqual(last, to)) {
+            const normalized = extracted
+              .map((pt) => this._normalizePoint(pt))
+              .filter((pt) => pt !== null);
+            if (normalized.length >= 2) {
+              path = normalized;
+            }
+          } else {
+            debugLog("constrained path deviated", [extracted, constrained]);
             return Infinity;
           }
         }
@@ -277,6 +298,27 @@ class EasyGridMovement {
     if (Number.isFinite(distance) && unit > 0) return distance / unit;
 
     return Infinity;
+  }
+
+  static _pointsRoughlyEqual(a, b) {
+    if (!a || !b) return false;
+    const ax = Number(a.x ?? a[0]);
+    const ay = Number(a.y ?? a[1]);
+    const bx = Number(b.x ?? b[0]);
+    const by = Number(b.y ?? b[1]);
+    if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+      return false;
+    }
+    const tolerance = 1;
+    return Math.abs(ax - bx) <= tolerance && Math.abs(ay - by) <= tolerance;
+  }
+
+  static _normalizePoint(point) {
+    if (!point) return null;
+    const x = Number(point.x ?? point[0]);
+    const y = Number(point.y ?? point[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x, y };
   }
 
   static _getNeighborOffsets() {
