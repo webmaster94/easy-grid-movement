@@ -416,6 +416,19 @@ class EasyGridMovement {
     };
 
     try {
+      if (typeof grid.highlightPosition === "function") {
+        grid.highlightPosition(LAYER_ID, {
+          x: gridX,
+          y: gridY,
+          ...options
+        });
+        return;
+      }
+    } catch (err) {
+      debugLog("highlightPosition failed", err);
+    }
+
+    try {
       if (typeof grid.highlightGridPosition === "function") {
         grid.highlightGridPosition(layer, { x: gridX, y: gridY }, options);
         return;
