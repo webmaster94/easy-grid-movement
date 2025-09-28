@@ -405,22 +405,41 @@ class EasyGridMovement {
 
   static _highlightCell(layer, gridX, gridY, band) {
     const style = band === "speed" ? COLORS.speed : COLORS.dash;
+    const grid = canvas.grid;
+    if (!grid || !layer) return;
+
+    const options = {
+      color: style.fill,
+      alpha: style.alpha,
+      border: style.fill,
+      borderAlpha: style.border
+    };
+
+    try {
+      if (typeof grid.highlightGridPosition === "function") {
+        grid.highlightGridPosition(layer, { x: gridX, y: gridY }, options);
+        return;
+      }
+    } catch (err) {
+      debugLog("highlightGridPosition failed", err);
+    }
+
     const topLeft = this._topLeftFromGridPosition(gridX, gridY);
     if (!topLeft) return;
 
     if (typeof layer.highlight === "function") {
-      layer.highlight(topLeft.x, topLeft.y, {
-        color: style.fill,
-        alpha: style.alpha,
-        border: style.border
-      });
-      return;
+      try {
+        layer.highlight(topLeft.x, topLeft.y, options);
+        return;
+      } catch (err) {
+        debugLog("layer.highlight failed", err);
+      }
     }
 
     if (typeof layer.beginFill === "function") {
       const size = Number(canvas.dimensions?.size) || 100;
-      layer.lineStyle(2, style.fill, style.border);
-      layer.beginFill(style.fill, style.alpha);
+      layer.lineStyle?.(2, options.color, options.borderAlpha);
+      layer.beginFill(options.color, options.alpha);
       layer.drawRect(topLeft.x, topLeft.y, size, size);
       layer.endFill();
     }
