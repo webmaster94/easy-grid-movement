@@ -444,7 +444,12 @@ class EasyGridMovement {
     const grid = canvas.grid;
     if (!grid || !layer) return;
 
-    const options = {
+    const topLeft = this._topLeftFromGridPosition(gridX, gridY);
+    if (!topLeft) return;
+
+    const pixelOptions = {
+      x: topLeft.x,
+      y: topLeft.y,
       color: style.fill,
       alpha: style.alpha,
       border: style.fill,
@@ -455,11 +460,7 @@ class EasyGridMovement {
 
     try {
       if (typeof iface?.highlightPosition === "function") {
-        iface.highlightPosition(LAYER_ID, {
-          x: gridX,
-          y: gridY,
-          ...options
-        });
+        iface.highlightPosition(LAYER_ID, pixelOptions);
         return;
       }
     } catch (err) {
@@ -468,32 +469,34 @@ class EasyGridMovement {
 
     try {
       if (typeof grid?.highlightPosition === "function") {
-        grid.highlightPosition(LAYER_ID, {
-          x: gridX,
-          y: gridY,
-          ...options
-        });
+        grid.highlightPosition(LAYER_ID, pixelOptions);
         return;
       }
     } catch (err) {
       debugLog("highlightPosition failed", err);
     }
 
+    const gridOptions = {
+      x: gridX,
+      y: gridY,
+      color: style.fill,
+      alpha: style.alpha,
+      border: style.fill,
+      borderAlpha: style.border
+    };
+
     try {
       if (typeof grid?.highlightGridPosition === "function") {
-        grid.highlightGridPosition(layer, { x: gridX, y: gridY }, options);
+        grid.highlightGridPosition(layer, { x: gridX, y: gridY }, gridOptions);
         return;
       }
     } catch (err) {
       debugLog("highlightGridPosition failed", err);
     }
 
-    const topLeft = this._topLeftFromGridPosition(gridX, gridY);
-    if (!topLeft) return;
-
     if (typeof layer.highlight === "function") {
       try {
-        layer.highlight(topLeft.x, topLeft.y, options);
+        layer.highlight(topLeft.x, topLeft.y, pixelOptions);
         return;
       } catch (err) {
         debugLog("layer.highlight failed", err);
@@ -502,8 +505,8 @@ class EasyGridMovement {
 
     if (typeof layer.beginFill === "function") {
       const size = Number(canvas.dimensions?.size) || 100;
-      layer.lineStyle?.(2, options.color, options.borderAlpha);
-      layer.beginFill(options.color, options.alpha);
+      layer.lineStyle?.(2, pixelOptions.color, pixelOptions.borderAlpha);
+      layer.beginFill(pixelOptions.color, pixelOptions.alpha);
       layer.drawRect(topLeft.x, topLeft.y, size, size);
       layer.endFill();
     }
