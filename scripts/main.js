@@ -283,7 +283,9 @@ class EasyGridMovement {
       if (typeof token.measureMovementPath === "function") {
         measurement = token.measureMovementPath(path);
       } else {
-        measurement = canvas.grid?.measurePath?.(path);
+        measurement = canvas.grid?.measurePath?.(
+          this._augmentPathForGridMeasurement(path, [fromGrid, toGrid])
+        );
       }
     } catch (err) {
       debugLog("measurePath failed", err);
@@ -311,6 +313,40 @@ class EasyGridMovement {
     }
     const tolerance = 1;
     return Math.abs(ax - bx) <= tolerance && Math.abs(ay - by) <= tolerance;
+  }
+
+  static _augmentPathForGridMeasurement(path, fallbackGridPoints = []) {
+    if (!Array.isArray(path)) return path;
+    let invalid = false;
+    const augmented = path.map((pt, idx) => {
+      const normalized = this._normalizePoint(pt);
+      if (!normalized) {
+        invalid = true;
+        return null;
+      }
+
+      let gridPoint = null;
+      if (Array.isArray(fallbackGridPoints) && fallbackGridPoints[idx]) {
+        gridPoint = fallbackGridPoints[idx];
+      }
+      if (!gridPoint) {
+        gridPoint = this._gridPositionFromPixels(normalized);
+      }
+
+      const i = Number(gridPoint?.x);
+      const j = Number(gridPoint?.y);
+
+      return {
+        x: normalized.x,
+        y: normalized.y,
+        ...(Number.isFinite(i) ? { i } : {}),
+        ...(Number.isFinite(j) ? { j } : {})
+      };
+    });
+
+    if (invalid) return path;
+
+    return augmented;
   }
 
   static _normalizePoint(point) {
@@ -415,8 +451,23 @@ class EasyGridMovement {
       borderAlpha: style.border
     };
 
+    const iface = canvas.interface?.grid;
+
     try {
-      if (typeof grid.highlightPosition === "function") {
+      if (typeof iface?.highlightPosition === "function") {
+        iface.highlightPosition(LAYER_ID, {
+          x: gridX,
+          y: gridY,
+          ...options
+        });
+        return;
+      }
+    } catch (err) {
+      debugLog("interface highlightPosition failed", err);
+    }
+
+    try {
+      if (typeof grid?.highlightPosition === "function") {
         grid.highlightPosition(LAYER_ID, {
           x: gridX,
           y: gridY,
@@ -429,7 +480,7 @@ class EasyGridMovement {
     }
 
     try {
-      if (typeof grid.highlightGridPosition === "function") {
+      if (typeof grid?.highlightGridPosition === "function") {
         grid.highlightGridPosition(layer, { x: gridX, y: gridY }, options);
         return;
       }
