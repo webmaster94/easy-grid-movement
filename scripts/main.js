@@ -2,6 +2,14 @@ const MODULE_ID = "easy-grid-movement";
 const LAYER_ID = "easy-grid-movement";
 const DEBUG_SETTING = "debug";
 
+function getRayClass() {
+  return (
+    foundry?.canvas?.geometry?.Ray ??
+    foundry?.utils?.Ray ??
+    globalThis?.Ray
+  );
+}
+
 const COLORS = {
   speed: { fill: 0x2e86ff, alpha: 0.18, border: 0.25 },
   dash: { fill: 0xf7d046, alpha: 0.16, border: 0.2 }
@@ -125,8 +133,8 @@ class EasyGridMovement {
   }
 
   static clear() {
-    const layer = canvas.grid?.getHighlightLayer?.(LAYER_ID);
-    if (layer) layer.clear();
+    const layer = this._getHighlightLayer();
+    if (layer && typeof layer.clear === "function") layer.clear();
     state.visible = false;
     state.lastTokenId = null;
     state.neighborOffsets = null;
@@ -161,9 +169,9 @@ class EasyGridMovement {
   }
 
   static _prepareLayer() {
-    let layer = canvas.grid?.getHighlightLayer?.(LAYER_ID);
-    if (!layer && typeof canvas.grid?.addHighlightLayer === "function") {
-      layer = canvas.grid.addHighlightLayer(LAYER_ID);
+    let layer = this._getHighlightLayer();
+    if (!layer) {
+      layer = this._addHighlightLayer();
     }
     if (!layer) {
       errorLog("failed to acquire highlight layer");
@@ -219,7 +227,9 @@ class EasyGridMovement {
     const to = this._centerFromGridPosition(toGrid.x, toGrid.y);
     if (!from || !to) return Infinity;
 
-    const ray = new Ray(from, to);
+    const RayClass = getRayClass();
+    if (!RayClass) return Infinity;
+    const ray = new RayClass(from, to);
     if (canvas.walls?.checkCollision?.(ray)) {
       debugLog("collision blocked", { from: fromGrid, to: toGrid });
       return Infinity;
@@ -227,21 +237,36 @@ class EasyGridMovement {
 
     let path = [from, to];
     if (typeof token.constrainMovementPath === "function") {
-      const constrained = token.constrainMovementPath(path);
-      if (!Array.isArray(constrained) || constrained.length < 2) return Infinity;
-      const last = constrained[constrained.length - 1];
-      if (!last || Math.abs(last.x - to.x) > 0.5 || Math.abs(last.y - to.y) > 0.5) {
-        debugLog("constrained path deviated", constrained);
-        return Infinity;
+      try {
+        const constrained = token.constrainMovementPath(path, { preview: false });
+        if (Array.isArray(constrained) && constrained.length >= 2) {
+          const last = constrained[constrained.length - 1];
+          if (
+            last &&
+            Math.abs(last.x - to.x) <= 0.5 &&
+            Math.abs(last.y - to.y) <= 0.5
+          ) {
+            path = constrained;
+          } else {
+            debugLog("constrained path deviated", constrained);
+            return Infinity;
+          }
+        }
+      } catch (err) {
+        debugLog("constrainMovementPath failed", err);
       }
-      path = constrained;
     }
 
     let measurement;
-    if (typeof token.measureMovementPath === "function") {
-      measurement = token.measureMovementPath(path);
-    } else {
-      measurement = canvas.grid?.measurePath?.(path);
+    try {
+      if (typeof token.measureMovementPath === "function") {
+        measurement = token.measureMovementPath(path);
+      } else {
+        measurement = canvas.grid?.measurePath?.(path);
+      }
+    } catch (err) {
+      debugLog("measurePath failed", err);
+      return Infinity;
     }
 
     const spaces = Number(measurement?.spaces);
@@ -288,16 +313,15 @@ class EasyGridMovement {
 
   static _gridPositionFromPixels(point) {
     const grid = canvas.grid;
-    const gridClass = grid?.grid;
-    if (gridClass?.getGridPositionFromPixels) {
-      const pos = gridClass.getGridPositionFromPixels(point.x, point.y);
-      if (Array.isArray(pos)) return { x: pos[0], y: pos[1] };
-      if (pos && typeof pos.x === "number" && typeof pos.y === "number") return { x: pos.x, y: pos.y };
-    }
-    if (grid?.getGridPositionFromPixels) {
-      const pos = grid.getGridPositionFromPixels(point.x, point.y);
-      if (Array.isArray(pos)) return { x: pos[0], y: pos[1] };
-      if (pos && typeof pos.x === "number" && typeof pos.y === "number") return { x: pos.x, y: pos.y };
+    const offset = grid?.getOffset?.(point);
+    if (offset) {
+      const x = Number(
+        offset.x ?? offset.i ?? offset.column ?? (Array.isArray(offset) ? offset[0] : undefined)
+      );
+      const y = Number(
+        offset.y ?? offset.j ?? offset.row ?? (Array.isArray(offset) ? offset[1] : undefined)
+      );
+      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
     }
     const size = Number(canvas.dimensions?.size) || 100;
     return {
@@ -323,7 +347,7 @@ class EasyGridMovement {
   }
 
   static _topLeftFromGridPosition(x, y) {
-    const grid = canvas.grid?.grid;
+    const grid = canvas.grid;
     if (grid?.getTopLeftPoint) {
       const point = grid.getTopLeftPoint({ x, y });
       if (point && typeof point.x === "number" && typeof point.y === "number") return point;
@@ -368,6 +392,22 @@ class EasyGridMovement {
     const active = character.getActiveTokens?.();
     if (Array.isArray(active) && active.length) return active[0];
     return null;
+  }
+
+  static _getHighlightLayer() {
+    const iface = canvas.interface?.grid;
+    if (iface?.getHighlightLayer) {
+      return iface.getHighlightLayer(LAYER_ID);
+    }
+    return canvas.grid?.getHighlightLayer?.(LAYER_ID);
+  }
+
+  static _addHighlightLayer() {
+    const iface = canvas.interface?.grid;
+    if (iface?.addHighlightLayer) {
+      return iface.addHighlightLayer(LAYER_ID);
+    }
+    return canvas.grid?.addHighlightLayer?.(LAYER_ID);
   }
 }
 
