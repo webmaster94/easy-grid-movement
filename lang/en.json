@@ -1,46 +1,17 @@
 {
   "EGM": {
-    "Keybinding": {
-      "Toggle": {
-        "Name": "Toggle movement highlight",
-        "Hint": "Show or hide reachable squares for the controlled token."
-      }
+    "Keybind": {
+      "ToggleName": "Toggle Easy Grid Movement",
+      "ToggleHint": "Show or hide reachable movement spaces for the selected token."
+    },
+    "Notify": {
+      "NoToken": "Select a token first.",
+      "Blocked": "Path blocked by walls.",
+      "NoSpeed": "No movement speed configured."
     },
     "Settings": {
-      "normalColor": {
-        "Name": "Normal movement color",
-        "Hint": "Hex color used to tint squares within the creature's normal movement budget."
-      },
-      "dashColor": {
-        "Name": "Dash movement color",
-        "Hint": "Hex color used to tint squares that require a Dash action to reach."
-      },
-      "highlightAlpha": {
-        "Name": "Highlight opacity",
-        "Hint": "Alpha value (0-1) applied to the movement highlights. Lower values are more transparent."
-      },
-      "multiMode": {
-        "Name": "Multiple token mode",
-        "Hint": "Highlight either the first controlled token or every controlled token.",
-        "Choices": {
-          "first": "First controlled token",
-          "all": "All controlled tokens"
-        }
-      },
-      "cellLimit": {
-        "Name": "Cell exploration limit",
-        "Hint": "Maximum number of grid cells to explore when searching for reachable positions. Higher values may impact performance."
-      },
-      "debugEnabled": {
-        "Name": "Enable debug logging",
-        "Hint": "Write detailed diagnostic information to the browser console to help troubleshoot measurement issues."
-      }
-    },
-    "Notifications": {
-      "NoToken": "No controlled token to measure movement for.",
-      "Gridless": "Gridless scenes are not supported for movement highlighting.",
-      "NoSpeed": "The selected token has no movement speed configured.",
-      "LimitReached": "Cell exploration limit reached before exhausting the dash distance. Results may be incomplete."
+      "DebugName": "Enable debug logging",
+      "DebugHint": "Write detailed diagnostic information to the browser console."
     }
   }
 }
