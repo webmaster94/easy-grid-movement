@@ -1,15 +1,16 @@
 {
   "id": "easy-grid-movement",
   "title": "Easy Grid Movement",
-  "description": "Highlights grid squares reachable by controlled tokens for normal and dash movement.",
-  "version": "1.0.0",
+  "description": "Highlights square-grid spaces reachable by a controlled token with normal movement or a Dash.",
+  "version": "1.1.0",
   "compatibility": {
-    "minimum": "13",
-    "verified": "13"
+    "minimum": "14",
+    "verified": "14"
   },
   "authors": [
     {
-      "name": "AI Coding Assistant"
+      "name": "webmaster94",
+      "url": "https://github.com/webmaster94"
     }
   ],
   "esmodules": [
@@ -22,7 +23,9 @@
       "path": "lang/en.json"
     }
   ],
-  "manifest": "",
-  "download": "",
-  "url": ""
+  "license": "LICENSE",
+  "readme": "README.md",
+  "url": "https://github.com/webmaster94/easy-grid-movement",
+  "manifest": "https://github.com/webmaster94/easy-grid-movement/releases/latest/download/module.json",
+  "download": "https://github.com/webmaster94/easy-grid-movement/releases/download/v1.1.0/easy-grid-movement-v1.1.0.zip"
 }

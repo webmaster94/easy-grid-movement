@@ -6,8 +6,8 @@
     },
     "Notify": {
       "NoToken": "Select a token first.",
-      "Blocked": "Path blocked by walls.",
-      "NoSpeed": "No movement speed configured."
+      "NoSpeed": "The selected token has no walking speed.",
+      "UnsupportedGrid": "Easy Grid Movement currently supports square-grid scenes only."
     },
     "Settings": {
       "DebugName": "Enable debug logging",
