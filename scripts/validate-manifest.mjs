@@ -10,6 +10,12 @@ if (manifest.id !== packageJson.name) errors.push("module id must match package 
 if (manifest.version !== packageJson.version) errors.push("module and package versions must match");
 if (manifest.compatibility?.minimum !== "14") errors.push("minimum Foundry version must be 14");
 if (manifest.compatibility?.verified !== "14") errors.push("verified Foundry version must be 14");
+if (!manifest.manifest?.endsWith("/releases/latest/download/module.json")) {
+  errors.push("manifest URL must use the stable latest-release URL");
+}
+if (!manifest.download?.endsWith(`/releases/download/v${manifest.version}/module.zip`)) {
+  errors.push("download URL must use the League template module.zip convention");
+}
 
 for (const path of [...(manifest.esmodules ?? []), ...(manifest.languages ?? []).map(({ path }) => path)]) {
   try {

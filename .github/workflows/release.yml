@@ -1,27 +1,56 @@
-name: Release
+# Adapted from the League of Foundry Developers FoundryVTT Module Template:
+# https://github.com/League-of-Foundry-Developers/FoundryVTT-Module-Template
+name: Create Module Files For GitHub Release
 
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
+
+env:
+  project_url: "https://github.com/${{ github.repository }}"
+  latest_manifest_url: "https://github.com/${{ github.repository }}/releases/latest/download/module.json"
+  release_module_url: "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/module.zip"
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+      - name: Setup Node
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm run package
-      - name: Verify tag matches manifest
-        run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./module.json').version")"
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" package/module.json package/easy-grid-movement-"$GITHUB_REF_NAME".zip --generate-notes --title "$GITHUB_REF_NAME"
+      - name: Install Dependencies
+        run: npm ci
+      - name: Stamp Release Values Into Module Manifest
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          test "${{ github.event.release.tag_name }}" = "v$(node -p "require('./package.json').version")"
+          jq --arg version "$VERSION" \
+             --arg url "${{ env.project_url }}" \
+             --arg manifest "${{ env.latest_manifest_url }}" \
+             --arg download "${{ env.release_module_url }}" \
+             '.version = $version | .url = $url | .manifest = $manifest | .download = $download' \
+             module.json > /tmp/module.json
+          mv /tmp/module.json module.json
+      - name: Check And Package Module
+        run: |
+          npm run check
+          npm run package
+      - name: Update Release With Module Files
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          name: ${{ github.event.release.name }}
+          draft: ${{ github.event.release.unpublished }}
+          prerelease: ${{ github.event.release.prerelease }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: "package/module.json,package/module.zip"
+          tag: ${{ github.event.release.tag_name }}
+          body: ${{ github.event.release.body }}

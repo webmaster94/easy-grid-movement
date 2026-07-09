@@ -37,4 +37,4 @@ npm run package
 - `npm run check` runs linting, strict TypeScript checks, unit tests, the production build, and manifest validation.
 - `npm run package` creates the Foundry release manifest and zip in `package/`.
 
-Pushes and pull requests run the same checks in GitHub Actions. Pushing a version tag such as `v1.1.0` creates a GitHub release whose assets match the URLs in `module.json`.
+Pushes and pull requests run the same checks in GitHub Actions. Publishing a GitHub release with a tag such as `v1.1.0` runs the League of Foundry Developers release workflow and attaches `module.json` and `module.zip`.
