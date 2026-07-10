@@ -97,6 +97,7 @@ export class EasyGridMovement {
       this.#renderer.clear();
       this.refresh();
     });
+    Hooks.on("sightRefresh", () => this.refresh());
     Hooks.on("canvasTearDown", () => this.#renderer.clear());
     this.#tracker.initialize();
   }
@@ -198,16 +199,20 @@ export class EasyGridMovement {
       canTraverse: (from, to) => this.#canTraverse(token, from, to),
     };
     const reachability = findReachability(start, overDistance, adapter);
-    const walk = cellsWithin(reachability.costs, walkDistance);
-    const dash = cellsWithin(reachability.costs, dashDistance);
-    const over = cellsWithin(reachability.costs, overDistance);
+    const walkRange = cellsWithin(reachability.costs, walkDistance);
+    const dashRange = cellsWithin(reachability.costs, dashDistance);
+    const overRange = cellsWithin(reachability.costs, overDistance);
+    const visible = new Set([...overRange].filter((key) => this.#canSeeCell(token, key)));
+    const walk = new Set([...walkRange].filter((key) => visible.has(key)));
+    const dash = new Set([...dashRange].filter((key) => visible.has(key)));
+    const over = visible;
     return {
       tokenId: token.id,
       start,
       walk,
       dash,
       over,
-      difficult: new Set([...difficult].filter((key) => over.has(key))),
+      difficult: new Set([...difficult].filter((key) => dash.has(key))),
       reachability,
       remainingWalk: walkDistance,
       remainingDash: dashDistance,
@@ -442,6 +447,30 @@ export class EasyGridMovement {
       if (occupied.some((space) => blocked.has(offsetKey(space)))) return false;
     }
     return true;
+  }
+
+  #canSeeCell(token: Token, key: string): boolean {
+    if (!canvas.visibility.tokenVision) return true;
+    try {
+      const visionSource = token.vision;
+      if (!visionSource?.active) return false;
+      const point = canvas.grid.getTopLeftPoint(parseOffsetKey(key));
+      const size = canvas.grid.size;
+      const elevation = token.document._source.elevation;
+      const config = canvas.visibility._createVisibilityTestConfig(
+        [{ x: point.x + size / 2, y: point.y + size / 2, elevation }],
+        { tolerance: 0 },
+      );
+      for (const id of ["basicSight", "lightPerception"]) {
+        const mode = token.document.detectionModes[id];
+        const detectionMode = CONFIG.Canvas.detectionModes[id];
+        if (mode && detectionMode?.testVisibility(visionSource, mode, config)) return true;
+      }
+      return false;
+    } catch (error) {
+      this.#debug("Visibility test failed.", error);
+      return false;
+    }
   }
 
   #elevationsOverlap(first: MovementWaypoint, second: MovementWaypoint): boolean {

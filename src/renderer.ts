@@ -1,8 +1,17 @@
-import { STYLES } from "./constants";
+import { MODULE_ID, STYLES } from "./constants";
 import { parseOffsetKey, type GridOffset } from "./grid";
 
 type MovementBand = "walk" | "dash" | "over";
 type RegionStyle = (typeof STYLES)[MovementBand];
+type HighlightZone = "walk" | "dash";
+
+interface GridEdge {
+  from: Point;
+  to: Point;
+  zones: Set<HighlightZone>;
+}
+
+const HIGHLIGHT_LAYER = `${MODULE_ID}.movement-ranges`;
 
 export interface MovementRendererHandlers {
   onHover(key: string): void;
@@ -26,9 +35,13 @@ export class MovementRenderer {
   #container: PIXI.Container | null = null;
   #previewGraphics: PIXI.Graphics | null = null;
   #distanceLabel: PIXI.Text | null = null;
+  #hoveredKey: string | null = null;
   #previousGridInteraction: boolean | null = null;
+  #wheelListener: ((event: WheelEvent) => void) | null = null;
 
   clear(): void {
+    if (this.#wheelListener) window.removeEventListener("wheel", this.#wheelListener, true);
+    if (canvas.interface?.grid) canvas.interface.grid.destroyHighlightLayer(HIGHLIGHT_LAYER);
     this.#container?.destroy({ children: true });
     if (this.#previousGridInteraction !== null && canvas.interface?.grid) {
       canvas.interface.grid.interactiveChildren = this.#previousGridInteraction;
@@ -36,7 +49,9 @@ export class MovementRenderer {
     this.#container = null;
     this.#previewGraphics = null;
     this.#distanceLabel = null;
+    this.#hoveredKey = null;
     this.#previousGridInteraction = null;
+    this.#wheelListener = null;
   }
 
   draw(
@@ -54,14 +69,22 @@ export class MovementRenderer {
     this.#container.sortableChildren = true;
     canvas.interface.grid.addChild(this.#container);
 
-    const ranges = new PIXI.Graphics();
+    const ranges = canvas.interface.grid.addHighlightLayer(HIGHLIGHT_LAYER);
     ranges.eventMode = "none";
-    ranges.zIndex = 0;
-    this.#container.addChild(ranges);
-    this.#drawRegion(ranges, overCells, STYLES.over);
-    this.#drawRegion(ranges, dashCells, STYLES.dash);
-    this.#drawRegion(ranges, walkCells, STYLES.walk);
+    this.#drawMovementGrid(ranges, walkCells, dashCells);
     this.#drawDifficultTerrain(ranges, difficultCells);
+
+    this.#wheelListener = (event) => {
+      const hoveredElement = document.elementFromPoint(event.clientX, event.clientY);
+      if (!hoveredElement || hoveredElement.id !== "board") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const delta = event.deltaY || event.deltaX || 0;
+      if (this.#hoveredKey && delta !== 0) {
+        handlers.onElevation(this.#hoveredKey, delta, event.shiftKey);
+      }
+    };
+    window.addEventListener("wheel", this.#wheelListener, { capture: true, passive: false });
 
     this.#previewGraphics = new PIXI.Graphics();
     this.#previewGraphics.eventMode = "none";
@@ -94,13 +117,13 @@ export class MovementRenderer {
       target.eventMode = "static";
       target.cursor = inMovementRange ? "pointer" : "not-allowed";
       target.zIndex = 20;
-      target.on("pointerover", () => handlers.onHover(key));
-      target.on("pointerout", () => handlers.onLeave());
-      target.on("wheel", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const delta = event.deltaY || event.delta || 0;
-        if (delta !== 0) handlers.onElevation(key, delta, event.shiftKey);
+      target.on("pointerover", () => {
+        this.#hoveredKey = key;
+        handlers.onHover(key);
+      });
+      target.on("pointerout", () => {
+        if (this.#hoveredKey === key) this.#hoveredKey = null;
+        handlers.onLeave();
       });
       target.on("pointertap", (event) => {
         if (event.button !== 0 || !inMovementRange) return;
@@ -201,29 +224,58 @@ export class MovementRenderer {
     return distance > 0 ? `+${formatted}` : formatted;
   }
 
-  #drawRegion(graphics: PIXI.Graphics, cells: ReadonlySet<string>, style: RegionStyle): void {
-    const size = canvas.grid.size;
-    graphics.beginFill(style.fillColor, style.fillAlpha);
-    graphics.lineStyle(0);
-    for (const key of cells) {
-      const point = canvas.grid.getTopLeftPoint(parseOffsetKey(key));
-      graphics.drawRect(point.x, point.y, size, size);
+  #drawMovementGrid(
+    graphics: PIXI.Graphics,
+    walkCells: ReadonlySet<string>,
+    dashCells: ReadonlySet<string>,
+  ): void {
+    const edges = new Map<string, GridEdge>();
+    for (const key of dashCells) {
+      const zone: HighlightZone = walkCells.has(key) ? "walk" : "dash";
+      const vertices = canvas.grid.getVertices(parseOffsetKey(key));
+      for (let index = 0; index < vertices.length; index += 1) {
+        const from = vertices[index];
+        const to = vertices[(index + 1) % vertices.length];
+        if (!from || !to) continue;
+        const edgeKey = this.#edgeKey(from, to);
+        const edge = edges.get(edgeKey) ?? { from, to, zones: new Set<HighlightZone>() };
+        edge.zones.add(zone);
+        edges.set(edgeKey, edge);
+      }
+    }
+
+    for (const edge of edges.values()) {
+      const zone: HighlightZone = edge.zones.has("dash") ? "dash" : "walk";
+      this.#drawDottedEdge(graphics, edge.from, edge.to, STYLES[zone]);
+    }
+
+    for (const edge of edges.values()) {
+      if (edge.zones.size < 2) continue;
+      const style = STYLES.dash;
+      graphics.lineStyle(style.borderWidth, style.borderColor, style.borderAlpha, 0.5);
+      graphics.moveTo(edge.from.x, edge.from.y).lineTo(edge.to.x, edge.to.y);
+    }
+  }
+
+  #drawDottedEdge(graphics: PIXI.Graphics, from: Point, to: Point, style: RegionStyle): void {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) return;
+    const spacing = Math.max(style.borderWidth * 3.5, canvas.grid.size * 0.12);
+    const radius = style.borderWidth * 0.65;
+    graphics.beginFill(style.borderColor, style.borderAlpha);
+    for (let distance = spacing / 2; distance < length; distance += spacing) {
+      const progress = distance / length;
+      graphics.drawCircle(from.x + dx * progress, from.y + dy * progress, radius);
     }
     graphics.endFill();
+  }
 
-    graphics.lineStyle(style.borderWidth, style.borderColor, style.borderAlpha, 0.5);
-    for (const key of cells) {
-      const { i, j } = parseOffsetKey(key);
-      const point = canvas.grid.getTopLeftPoint({ i, j });
-      if (!cells.has(`${i - 1},${j}`)) graphics.moveTo(point.x, point.y).lineTo(point.x + size, point.y);
-      if (!cells.has(`${i + 1},${j}`)) {
-        graphics.moveTo(point.x, point.y + size).lineTo(point.x + size, point.y + size);
-      }
-      if (!cells.has(`${i},${j - 1}`)) graphics.moveTo(point.x, point.y).lineTo(point.x, point.y + size);
-      if (!cells.has(`${i},${j + 1}`)) {
-        graphics.moveTo(point.x + size, point.y).lineTo(point.x + size, point.y + size);
-      }
-    }
+  #edgeKey(first: Point, second: Point): string {
+    const firstKey = `${Math.round(first.x * 1000)},${Math.round(first.y * 1000)}`;
+    const secondKey = `${Math.round(second.x * 1000)},${Math.round(second.y * 1000)}`;
+    return firstKey < secondKey ? `${firstKey}|${secondKey}` : `${secondKey}|${firstKey}`;
   }
 
   #drawDifficultTerrain(graphics: PIXI.Graphics, cells: ReadonlySet<string>): void {

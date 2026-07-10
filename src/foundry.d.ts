@@ -42,6 +42,7 @@ interface TokenDocument {
   level: string;
   inCombat: boolean;
   movementAction: string;
+  detectionModes: Record<string, unknown>;
   _movementHistory?: MovementWaypoint[];
   _source: MovementWaypoint;
   getCenterPoint(data?: Partial<Point>): Point;
@@ -62,6 +63,7 @@ interface Token {
       };
     };
   } | null;
+  vision?: VisionSource | null;
   _getDragWaypointPosition(
     current: MovementWaypoint,
     changes: Partial<Point>,
@@ -89,6 +91,16 @@ interface Token {
   ): MovementMeasurement;
 }
 
+interface VisionSource {
+  active: boolean;
+}
+
+interface VisibilityTestConfig {
+  object?: unknown;
+  level?: unknown;
+  tests?: unknown[];
+}
+
 interface TokenUpdate {
   x?: number;
   y?: number;
@@ -110,6 +122,7 @@ interface HooksApi {
   on(hook: "updateToken", callback: (document: TokenDocument, changes: TokenUpdate) => unknown): number;
   on(hook: "controlToken", callback: (token: Token, controlled: boolean) => unknown): number;
   on(hook: "canvasReady", callback: () => unknown): number;
+  on(hook: "sightRefresh", callback: () => unknown): number;
   on(hook: "canvasTearDown", callback: () => unknown): number;
 }
 
@@ -131,10 +144,12 @@ declare const canvas: {
   grid: {
     isSquare: boolean;
     size: number;
+    thickness: number;
     distance: number;
     getOffset(point: Point): GridOffset;
     getTopLeftPoint(offset: GridOffset): Point;
     getAdjacentOffsets(offset: GridOffset): GridOffset[];
+    getVertices(offset: GridOffset): Point[];
     measurePath(points: Point[]): { distance: number };
   };
   dimensions: {
@@ -162,13 +177,32 @@ declare const canvas: {
     grid: {
       interactiveChildren: boolean;
       addChild(child: PIXI.Container): void;
+      addHighlightLayer(name: string): PIXI.Graphics;
+      destroyHighlightLayer(name: string): void;
     };
+  };
+  visibility: {
+    tokenVision: boolean;
+    _createVisibilityTestConfig(
+      points: Point | Point[],
+      options?: { tolerance?: number },
+    ): VisibilityTestConfig;
   };
 };
 
 declare const CONFIG: {
   Canvas: {
     elevationSnappingPrecision: number;
+    detectionModes: Record<
+      string,
+      {
+        testVisibility(
+          visionSource: VisionSource,
+          mode: unknown,
+          config: VisibilityTestConfig,
+        ): boolean;
+      }
+    >;
   };
 };
 
@@ -199,24 +233,16 @@ declare namespace PIXI {
     endFill(): this;
     lineStyle(width?: number, color?: number, alpha?: number, alignment?: number): this;
     drawCircle(x: number, y: number, radius: number): this;
+    drawPolygon(points: Point[]): this;
     drawRect(x: number, y: number, width: number, height: number): this;
     moveTo(x: number, y: number): this;
     lineTo(x: number, y: number): this;
     on(event: "pointerover" | "pointerout", callback: () => void): this;
     on(event: "pointertap", callback: (event: FederatedPointerEvent) => void): this;
-    on(event: "wheel", callback: (event: FederatedWheelEvent) => void): this;
   }
 
   interface FederatedPointerEvent {
     button: number;
-    stopPropagation(): void;
-  }
-
-  interface FederatedWheelEvent {
-    delta: number;
-    deltaY: number;
-    shiftKey: boolean;
-    preventDefault(): void;
     stopPropagation(): void;
   }
 
