@@ -5,14 +5,20 @@ export interface GridOffset {
 
 export interface ReachabilityAdapter {
   getNeighbors(offset: GridOffset): GridOffset[];
-  getStepCost(from: GridOffset, to: GridOffset): number;
+  getPathCost(path: readonly GridOffset[]): number;
   canOccupy(offset: GridOffset): boolean;
   canTraverse(from: GridOffset, to: GridOffset): boolean;
+}
+
+export interface ReachabilityResult {
+  costs: Map<string, number>;
+  paths: Map<string, GridOffset[]>;
 }
 
 interface QueueEntry {
   offset: GridOffset;
   cost: number;
+  path: GridOffset[];
 }
 
 class MinQueue {
@@ -73,17 +79,19 @@ export function parseOffsetKey(key: string): GridOffset {
   return { i, j };
 }
 
-export function findReachableCosts(
+export function findReachability(
   start: GridOffset,
   maximumCost: number,
   adapter: ReachabilityAdapter,
-): Map<string, number> {
+): ReachabilityResult {
   const costs = new Map<string, number>();
-  if (maximumCost < 0 || !adapter.canOccupy(start)) return costs;
+  const paths = new Map<string, GridOffset[]>();
+  if (maximumCost < 0 || !adapter.canOccupy(start)) return { costs, paths };
 
   const queue = new MinQueue();
   costs.set(offsetKey(start), 0);
-  queue.push({ offset: start, cost: 0 });
+  paths.set(offsetKey(start), [start]);
+  queue.push({ offset: start, cost: 0, path: [start] });
 
   while (queue.size > 0) {
     const current = queue.pop();
@@ -93,19 +101,28 @@ export function findReachableCosts(
 
     for (const neighbor of adapter.getNeighbors(current.offset)) {
       if (!adapter.canOccupy(neighbor) || !adapter.canTraverse(current.offset, neighbor)) continue;
-      const stepCost = adapter.getStepCost(current.offset, neighbor);
-      if (!Number.isFinite(stepCost) || stepCost <= 0) continue;
-
-      const cost = Math.round((current.cost + stepCost) * 100) / 100;
+      const path = [...current.path, neighbor];
+      const measuredCost = adapter.getPathCost(path);
+      if (!Number.isFinite(measuredCost) || measuredCost <= current.cost) continue;
+      const cost = Math.round(measuredCost * 100) / 100;
       if (cost > maximumCost + 0.01) continue;
       const key = offsetKey(neighbor);
       if ((costs.get(key) ?? Infinity) <= cost) continue;
       costs.set(key, cost);
-      queue.push({ offset: neighbor, cost });
+      paths.set(key, path);
+      queue.push({ offset: neighbor, cost, path });
     }
   }
 
-  return costs;
+  return { costs, paths };
+}
+
+export function findReachableCosts(
+  start: GridOffset,
+  maximumCost: number,
+  adapter: ReachabilityAdapter,
+): Map<string, number> {
+  return findReachability(start, maximumCost, adapter).costs;
 }
 
 export function cellsWithin(costs: ReadonlyMap<string, number>, distance: number): Set<string> {

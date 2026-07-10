@@ -8,10 +8,13 @@ interface Position {
 export class MovementTracker {
   readonly #moved = new Map<string, number>();
   readonly #lastPositions = new Map<string, Position>();
+  readonly #pendingMoves = new Map<string, number>();
   readonly #onRefresh: (tokenId?: string) => void;
+  readonly #shouldTrack: (tokenId: string) => boolean;
 
-  constructor(onRefresh: (tokenId?: string) => void) {
+  constructor(onRefresh: (tokenId?: string) => void, shouldTrack: (tokenId: string) => boolean) {
     this.#onRefresh = onRefresh;
+    this.#shouldTrack = shouldTrack;
   }
 
   initialize(): void {
@@ -28,38 +31,108 @@ export class MovementTracker {
     });
 
     Hooks.on("preUpdateToken", (tokenDocument, changes) => {
-      if (!game.combat?.started || !tokenDocument.inCombat) return;
+      if (!tokenDocument.id || !this.#shouldTrack(tokenDocument.id)) return;
       if (changes.x === undefined && changes.y === undefined) return;
-      if (!tokenDocument.id) return;
-      this.#lastPositions.set(tokenDocument.id, { x: tokenDocument.x, y: tokenDocument.y });
+      this.#lastPositions.set(tokenDocument.id, {
+        x: tokenDocument._source.x,
+        y: tokenDocument._source.y,
+      });
     });
 
     Hooks.on("updateToken", (tokenDocument, changes) => {
-      if (!tokenDocument.id) return;
+      if (!tokenDocument.id || !this.#shouldTrack(tokenDocument.id)) return;
+      const pendingDistance = this.#pendingMoves.get(tokenDocument.id);
+      if (pendingDistance !== undefined && this.#positionChanged(changes)) {
+        this.#pendingMoves.delete(tokenDocument.id);
+        this.#lastPositions.delete(tokenDocument.id);
+        const nativeDistance = this.#measureNativeHistory(tokenDocument);
+        if (nativeDistance === null) this.#addDistance(tokenDocument.id, pendingDistance);
+        else {
+          this.#moved.set(tokenDocument.id, nativeDistance);
+          this.#debug(`Foundry movement history reports ${nativeDistance} movement spent.`);
+          this.#onRefresh(tokenDocument.id);
+        }
+        return;
+      }
+
+      const nativeDistance = this.#measureNativeHistory(tokenDocument);
+      if (nativeDistance !== null && "_movementHistory" in changes) {
+        this.#pendingMoves.delete(tokenDocument.id);
+        this.#moved.set(tokenDocument.id, nativeDistance);
+        this.#lastPositions.delete(tokenDocument.id);
+        this.#debug(`Foundry movement history reports ${nativeDistance} movement spent.`);
+        this.#onRefresh(tokenDocument.id);
+        return;
+      }
+
       const start = this.#lastPositions.get(tokenDocument.id);
       this.#lastPositions.delete(tokenDocument.id);
-      if (!start || (changes.x === undefined && changes.y === undefined)) return;
-
-      const distance = this.#measureDistance(start, { x: tokenDocument.x, y: tokenDocument.y });
-      if (distance <= 0) return;
-      const total = (this.#moved.get(tokenDocument.id) ?? 0) + distance;
-      this.#moved.set(tokenDocument.id, total);
-      this.#debug(`Token moved ${distance}; total movement is ${total}.`);
-      this.#onRefresh(tokenDocument.id);
+      if (!start || !this.#positionChanged(changes)) return;
+      const distance = this.#measureDistance(start, {
+        x: tokenDocument._source.x,
+        y: tokenDocument._source.y,
+      });
+      if (distance > 0) this.#addDistance(tokenDocument.id, distance);
     });
   }
 
-  getMovedDistance(tokenId: string): number {
-    return this.#moved.get(tokenId) ?? 0;
+  getMovedDistance(token: Token): number {
+    const nativeDistance = this.#measureNativeHistory(token.document);
+    return Math.max(this.#moved.get(token.id) ?? 0, nativeDistance ?? 0);
   }
 
-  reset(): void {
+  beginPlannedMove(tokenId: string, distance: number): void {
+    this.#pendingMoves.set(tokenId, distance);
+  }
+
+  cancelPlannedMove(tokenId: string): void {
+    this.#pendingMoves.delete(tokenId);
+  }
+
+  finishPlannedMove(tokenId: string): void {
+    const distance = this.#pendingMoves.get(tokenId);
+    if (distance === undefined) return;
+    this.#pendingMoves.delete(tokenId);
+    this.#addDistance(tokenId, distance);
+  }
+
+  reset(tokenId?: string): void {
+    if (tokenId) {
+      this.#moved.delete(tokenId);
+      this.#lastPositions.delete(tokenId);
+      this.#pendingMoves.delete(tokenId);
+      return;
+    }
     this.#moved.clear();
     this.#lastPositions.clear();
+    this.#pendingMoves.clear();
+  }
+
+  #positionChanged(changes: TokenUpdate): boolean {
+    return changes.x !== undefined || changes.y !== undefined;
+  }
+
+  #addDistance(tokenId: string, distance: number): void {
+    const total = Math.round(((this.#moved.get(tokenId) ?? 0) + distance) * 100) / 100;
+    this.#moved.set(tokenId, total);
+    this.#debug(`Token moved ${distance}; total movement is ${total}.`);
+    this.#onRefresh(tokenId);
+  }
+
+  #measureNativeHistory(tokenDocument: TokenDocument): number | null {
+    const history = tokenDocument._movementHistory;
+    const token = tokenDocument.id ? canvas.tokens.get(tokenDocument.id) : undefined;
+    if (!token || !history || history.length < 2) return null;
+    try {
+      const measurement = token.measureMovementPath(history, { preview: false });
+      const cost = measurement.cost ?? measurement.distance;
+      return Number.isFinite(cost) ? cost : null;
+    } catch {
+      return null;
+    }
   }
 
   #measureDistance(start: Position, end: Position): number {
-    if (!canvas.grid) return 0;
     try {
       const distance = canvas.grid.measurePath([start, end]).distance;
       return Number.isFinite(distance) ? distance : 0;

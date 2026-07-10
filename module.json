@@ -1,8 +1,8 @@
 {
   "id": "easy-grid-movement",
   "title": "Easy Grid Movement",
-  "description": "Highlights square-grid spaces reachable by a controlled token with normal movement or a Dash.",
-  "version": "1.1.0",
+  "description": "XCOM-inspired, wall-aware movement planning with clickable destinations and path-cost previews.",
+  "version": "1.2.0",
   "compatibility": {
     "minimum": "14",
     "verified": "14"
@@ -27,5 +27,5 @@
   "readme": "README.md",
   "url": "https://github.com/webmaster94/easy-grid-movement",
   "manifest": "https://github.com/webmaster94/easy-grid-movement/releases/latest/download/module.json",
-  "download": "https://github.com/webmaster94/easy-grid-movement/releases/download/v1.1.0/module.zip"
+  "download": "https://github.com/webmaster94/easy-grid-movement/releases/download/v1.2.0/module.zip"
 }

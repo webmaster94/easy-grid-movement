@@ -4,14 +4,40 @@ interface Point {
   elevation?: number;
 }
 
+interface MovementWaypoint extends Point {
+  elevation: number;
+  width: number;
+  height: number;
+  depth: number;
+  shape: number;
+  level: string;
+  action?: string;
+  checkpoint?: boolean;
+  explicit?: boolean;
+  snapped?: boolean;
+}
+
+interface MovementMeasurement {
+  cost?: number;
+  distance: number;
+  spaces?: number;
+}
+
 interface TokenDocument {
   id: string | null;
   x: number;
   y: number;
   width: number;
   height: number;
+  depth: number;
+  level: string;
   inCombat: boolean;
+  movementAction: string;
+  _movementHistory?: MovementWaypoint[];
+  _source: MovementWaypoint;
   getCenterPoint(data?: Partial<Point>): Point;
+  getMovementOrigin(data?: Partial<MovementWaypoint>): Point;
+  getOccupiedGridSpaceOffsets(data?: Partial<MovementWaypoint>): GridOffset[];
 }
 
 interface Token {
@@ -31,16 +57,34 @@ interface Token {
     destination: Point,
     options?: { origin?: Point; type?: "move" | "sight" | "light"; mode?: "any" | "all" | "closest" },
   ): boolean | unknown[] | object | null;
+  constrainMovementPath(
+    waypoints: MovementWaypoint[],
+    options: { preview?: boolean; ignoreCost?: boolean; ignoreTokens?: boolean },
+  ): [MovementWaypoint[], boolean];
+  createTerrainMovementPath(
+    waypoints: MovementWaypoint[],
+    options?: { preview?: boolean },
+  ): MovementWaypoint[];
+  findMovementPath(
+    waypoints: MovementWaypoint[],
+    options?: { preview?: boolean; constrainOptions?: Record<string, unknown> },
+  ): { result: MovementWaypoint[]; promise: Promise<MovementWaypoint[]>; cancel(): void };
+  measureMovementPath(
+    waypoints: MovementWaypoint[],
+    options?: { preview?: boolean },
+  ): MovementMeasurement;
 }
 
 interface TokenUpdate {
   x?: number;
   y?: number;
+  _movementHistory?: MovementWaypoint[];
 }
 
 interface GridOffset {
   i: number;
   j: number;
+  k?: number;
 }
 
 interface HooksApi {
@@ -83,13 +127,24 @@ declare const canvas: {
     sceneY: number;
     sceneWidth: number;
     sceneHeight: number;
+    rect: { contains(x: number, y: number): boolean };
   };
   tokens: {
     controlled: Token[];
+    placeables: Token[];
     get(id: string): Token | undefined;
+  };
+  scene: {
+    grid: { units: string };
+    updateEmbeddedDocuments(
+      documentName: "Token",
+      updates: Array<{ _id: string }>,
+      options: Record<string, unknown>,
+    ): Promise<unknown[]>;
   };
   interface: {
     grid: {
+      interactiveChildren: boolean;
       addChild(child: PIXI.Container): void;
     };
   };
@@ -99,21 +154,48 @@ declare const ui: {
   notifications: {
     info(message: string): void;
     warn(message: string): void;
+    error(message: string): void;
   };
 };
 
 declare namespace PIXI {
   class Container {
-    addChild(child: Graphics): void;
+    interactiveChildren: boolean;
+    sortableChildren: boolean;
+    zIndex: number;
+    eventMode: string;
+    addChild<T extends Container | Graphics | Text>(child: T): T;
     destroy(options?: { children?: boolean }): void;
   }
 
   class Graphics {
+    cursor: string;
+    eventMode: string;
+    zIndex: number;
     beginFill(color?: number, alpha?: number): this;
+    clear(): this;
     endFill(): this;
     lineStyle(width?: number, color?: number, alpha?: number, alignment?: number): this;
+    drawCircle(x: number, y: number, radius: number): this;
     drawRect(x: number, y: number, width: number, height: number): this;
     moveTo(x: number, y: number): this;
     lineTo(x: number, y: number): this;
+    on(event: "pointerover" | "pointerout", callback: () => void): this;
+    on(event: "pointertap", callback: (event: FederatedPointerEvent) => void): this;
+  }
+
+  interface FederatedPointerEvent {
+    button: number;
+    stopPropagation(): void;
+  }
+
+  class Text {
+    constructor(text: string, style?: Record<string, unknown>);
+    anchor: { set(x: number, y?: number): void };
+    eventMode: string;
+    position: { set(x: number, y: number): void };
+    text: string;
+    visible: boolean;
+    zIndex: number;
   }
 }
