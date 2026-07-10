@@ -15,12 +15,21 @@ interface MovementWaypoint extends Point {
   checkpoint?: boolean;
   explicit?: boolean;
   snapped?: boolean;
+  intermediate?: boolean;
+  terrain?: {
+    difficulty?: number;
+    difficultTerrain?: boolean;
+  } | null;
 }
 
 interface MovementMeasurement {
   cost?: number;
   distance: number;
   spaces?: number;
+  waypoints: Array<{
+    cost: number;
+    distance: number;
+  }>;
 }
 
 interface TokenDocument {
@@ -53,6 +62,11 @@ interface Token {
       };
     };
   } | null;
+  _getDragWaypointPosition(
+    current: MovementWaypoint,
+    changes: Partial<Point>,
+    options?: { snap?: boolean },
+  ): MovementWaypoint;
   checkCollision(
     destination: Point,
     options?: { origin?: Point; type?: "move" | "sight" | "light"; mode?: "any" | "all" | "closest" },
@@ -78,6 +92,7 @@ interface Token {
 interface TokenUpdate {
   x?: number;
   y?: number;
+  elevation?: number;
   _movementHistory?: MovementWaypoint[];
 }
 
@@ -123,6 +138,7 @@ declare const canvas: {
     measurePath(points: Point[]): { distance: number };
   };
   dimensions: {
+    distance: number;
     sceneX: number;
     sceneY: number;
     sceneWidth: number;
@@ -147,6 +163,12 @@ declare const canvas: {
       interactiveChildren: boolean;
       addChild(child: PIXI.Container): void;
     };
+  };
+};
+
+declare const CONFIG: {
+  Canvas: {
+    elevationSnappingPrecision: number;
   };
 };
 
@@ -182,10 +204,19 @@ declare namespace PIXI {
     lineTo(x: number, y: number): this;
     on(event: "pointerover" | "pointerout", callback: () => void): this;
     on(event: "pointertap", callback: (event: FederatedPointerEvent) => void): this;
+    on(event: "wheel", callback: (event: FederatedWheelEvent) => void): this;
   }
 
   interface FederatedPointerEvent {
     button: number;
+    stopPropagation(): void;
+  }
+
+  interface FederatedWheelEvent {
+    delta: number;
+    deltaY: number;
+    shiftKey: boolean;
+    preventDefault(): void;
     stopPropagation(): void;
   }
 

@@ -16,6 +16,17 @@ const orthogonalNeighbors = ({ i, j }: GridOffset): GridOffset[] => [
   { i, j: j + 1 },
 ];
 
+const allNeighbors = ({ i, j }: GridOffset): GridOffset[] => [
+  { i: i - 1, j: j - 1 },
+  { i: i - 1, j },
+  { i: i - 1, j: j + 1 },
+  { i, j: j - 1 },
+  { i, j: j + 1 },
+  { i: i + 1, j: j - 1 },
+  { i: i + 1, j },
+  { i: i + 1, j: j + 1 },
+];
+
 function adapter(blocked = new Set<string>()): ReachabilityAdapter {
   return {
     getNeighbors: orthogonalNeighbors,
@@ -45,6 +56,19 @@ describe("findReachableCosts", () => {
     expect(cellsWithin(costs, 10).size).toBe(13);
   });
 
+  it("separates normal, dash, and over-range display bands from one search", () => {
+    const costs = findReachableCosts({ i: 2, j: 2 }, 15, adapter());
+    const walk = cellsWithin(costs, 5);
+    const dash = cellsWithin(costs, 10);
+    const over = cellsWithin(costs, 15);
+
+    expect(walk.size).toBe(5);
+    expect(dash.size).toBe(13);
+    expect(over.size).toBe(21);
+    expect([...walk].every((key) => dash.has(key))).toBe(true);
+    expect([...dash].every((key) => over.has(key))).toBe(true);
+  });
+
   it("retains the cheapest complete path for hover previews and movement", () => {
     const expensive = "0,1";
     const result = findReachability(
@@ -61,6 +85,21 @@ describe("findReachableCosts", () => {
 
     expect(result.costs.get("0,2")).toBe(20);
     expect(result.paths.get("0,2")?.map(offsetKey)).toEqual(["0,0", "1,0", "1,1", "1,2", "0,2"]);
+  });
+
+  it("prefers the straightest geometrically shortest route when native costs tie", () => {
+    const result = findReachability(
+      { i: 1, j: 0 },
+      10,
+      {
+        getNeighbors: allNeighbors,
+        getPathCost: (path) => (path.length - 1) * 5,
+        canOccupy: ({ i, j }) => i >= 0 && i < 3 && j >= 0 && j < 3,
+        canTraverse: () => true,
+      },
+    );
+
+    expect(result.paths.get("1,2")?.map(offsetKey)).toEqual(["1,0", "1,1", "1,2"]);
   });
 });
 

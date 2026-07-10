@@ -8,6 +8,7 @@
       "NoToken": "Select a token first.",
       "NoSpeed": "The selected token has no walking speed.",
       "UnsupportedGrid": "Easy Grid Movement currently supports square-grid scenes only.",
+      "OutOfRange": "That destination is beyond this turn's movement range.",
       "PathBlocked": "That movement path is no longer available.",
       "MoveFailed": "The token could not be moved to that destination."
     },

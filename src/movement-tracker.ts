@@ -3,6 +3,7 @@ import { DEBUG_SETTING, MODULE_ID } from "./constants";
 interface Position {
   x: number;
   y: number;
+  elevation: number;
 }
 
 export class MovementTracker {
@@ -32,10 +33,11 @@ export class MovementTracker {
 
     Hooks.on("preUpdateToken", (tokenDocument, changes) => {
       if (!tokenDocument.id || !this.#shouldTrack(tokenDocument.id)) return;
-      if (changes.x === undefined && changes.y === undefined) return;
+      if (changes.x === undefined && changes.y === undefined && changes.elevation === undefined) return;
       this.#lastPositions.set(tokenDocument.id, {
         x: tokenDocument._source.x,
         y: tokenDocument._source.y,
+        elevation: tokenDocument._source.elevation,
       });
     });
 
@@ -71,6 +73,7 @@ export class MovementTracker {
       const distance = this.#measureDistance(start, {
         x: tokenDocument._source.x,
         y: tokenDocument._source.y,
+        elevation: tokenDocument._source.elevation,
       });
       if (distance > 0) this.#addDistance(tokenDocument.id, distance);
     });
@@ -109,7 +112,7 @@ export class MovementTracker {
   }
 
   #positionChanged(changes: TokenUpdate): boolean {
-    return changes.x !== undefined || changes.y !== undefined;
+    return changes.x !== undefined || changes.y !== undefined || changes.elevation !== undefined;
   }
 
   #addDistance(tokenId: string, distance: number): void {
