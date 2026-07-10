@@ -4,12 +4,12 @@ export const DEBUG_SETTING = "debug";
 export const STYLES = {
   walk: {
     borderColor: 0x33bc4e,
-    borderAlpha: 0.8,
+    borderAlpha: 1,
     borderWidth: 3,
   },
   dash: {
     borderColor: 0xf1d836,
-    borderAlpha: 0.8,
+    borderAlpha: 1,
     borderWidth: 3,
   },
   over: {

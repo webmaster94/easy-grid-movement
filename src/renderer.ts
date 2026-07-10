@@ -1,7 +1,7 @@
 import { MODULE_ID, STYLES } from "./constants";
 import { parseOffsetKey, type GridOffset } from "./grid";
+import type { MovementBand } from "./movement-band";
 
-type MovementBand = "walk" | "dash" | "over";
 type RegionStyle = (typeof STYLES)[MovementBand];
 type HighlightZone = "walk" | "dash";
 
@@ -29,6 +29,7 @@ export interface MovementPreview {
   footprint: { width: number; height: number };
   elevation: number;
   elevationDelta: number;
+  destinationBand: MovementBand;
 }
 
 export class MovementRenderer {
@@ -109,13 +110,12 @@ export class MovementRenderer {
     for (const key of overCells) {
       const offset = parseOffsetKey(key);
       const point = canvas.grid.getTopLeftPoint(offset);
-      const inMovementRange = dashCells.has(key);
       const target = new PIXI.Graphics();
       target.beginFill(0xffffff, 0.001);
       target.drawRect(point.x, point.y, canvas.grid.size, canvas.grid.size);
       target.endFill();
       target.eventMode = "static";
-      target.cursor = inMovementRange ? "pointer" : "not-allowed";
+      target.cursor = "pointer";
       target.zIndex = 20;
       target.on("pointerover", () => {
         this.#hoveredKey = key;
@@ -126,7 +126,7 @@ export class MovementRenderer {
         handlers.onLeave();
       });
       target.on("pointertap", (event) => {
-        if (event.button !== 0 || !inMovementRange) return;
+        if (event.button !== 0) return;
         event.stopPropagation();
         handlers.onSelect(key);
       });
@@ -150,7 +150,7 @@ export class MovementRenderer {
     }
 
     const destinationPoint = canvas.grid.getTopLeftPoint(preview.destination);
-    graphics.lineStyle(5, 0xffffff, 1, 0.5);
+    graphics.lineStyle(5, STYLES[preview.destinationBand].borderColor, 1, 0.5);
     graphics.drawRect(
       destinationPoint.x,
       destinationPoint.y,

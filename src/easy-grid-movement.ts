@@ -10,6 +10,7 @@ import {
   type ReachabilityResult,
 } from "./grid";
 import { MovementTracker } from "./movement-tracker";
+import { movementBand } from "./movement-band";
 import { MovementRenderer } from "./renderer";
 
 export interface MovementPlan {
@@ -238,14 +239,10 @@ export class EasyGridMovement {
         return;
       }
       if (resolved.cost <= 0.01 && this.#samePosition(token.document._source, resolved.destination)) return;
-      if (resolved.cost > this.#plan.remainingDash + 0.01) {
-        ui.notifications.warn(game.i18n.localize("EGM.Notify.OutOfRange"));
-        return;
-      }
-
       this.#renderer.clearPreview();
       this.#tracker.beginPlannedMove(token.id, resolved.cost);
       moveStarted = true;
+      const descending = resolved.destination.elevation < token.document._source.elevation - 0.01;
       const origin = {
         x: token.document._source.x,
         y: token.document._source.y,
@@ -262,7 +259,9 @@ export class EasyGridMovement {
           method: "dragging",
           action: token.document.movementAction,
           terrainOptions: {},
-          constrainOptions: { ignoreWalls: false, ignoreCost: false, ignoreTokens: false },
+          // The horizontal path was just wall-checked by #resolveMovementPath. Foundry otherwise
+          // truncates a downward endpoint at the current floor and applies only the horizontal part.
+          constrainOptions: { ignoreWalls: descending, ignoreCost: false, ignoreTokens: false },
           measureOptions: {},
           movement: {
             [token.id]: {
@@ -350,11 +349,7 @@ export class EasyGridMovement {
     this.#renderer.showPreview({
       path: resolved.terrainPath.map((waypoint) => token.document.getCenterPoint(waypoint)),
       segmentBands: resolved.measurement.waypoints.slice(1).map((waypoint) =>
-        waypoint.cost > plan.remainingDash + 0.01
-          ? "over"
-          : waypoint.cost > plan.remainingWalk + 0.01
-            ? "dash"
-            : "walk",
+        movementBand(waypoint.cost, plan.remainingWalk, plan.remainingDash),
       ),
       difficultSegments: resolved.terrainPath.slice(1).map((waypoint) =>
         Boolean(waypoint.terrain?.difficultTerrain),
@@ -367,6 +362,7 @@ export class EasyGridMovement {
       },
       elevation,
       elevationDelta: elevation - token.document._source.elevation,
+      destinationBand: movementBand(resolved.cost, plan.remainingWalk, plan.remainingDash),
     });
   }
 
@@ -380,16 +376,23 @@ export class EasyGridMovement {
     const last = waypoints.at(-1);
     if (!last) return null;
     const destination = { ...last, elevation };
-    if (waypoints.length === 1) waypoints.push(destination);
-    else waypoints[waypoints.length - 1] = destination;
+    const descending = elevation < token.document._source.elevation - 0.01;
+    const pathDestination = descending
+      ? { ...destination, elevation: token.document._source.elevation }
+      : destination;
+    if (waypoints.length === 1) waypoints.push(pathDestination);
+    else waypoints[waypoints.length - 1] = pathDestination;
 
     const search = token.findMovementPath(waypoints, {
       preview,
       constrainOptions: { ignoreCost: true, ignoreWalls: false, ignoreTokens: false },
     });
-    const movementPath = await search.promise;
-    const final = movementPath.at(-1);
-    if (!final || !this.#samePosition(destination, final)) return null;
+    const foundPath = await search.promise;
+    const final = foundPath.at(-1);
+    if (!final || !this.#samePosition(pathDestination, final)) return null;
+    const movementPath = descending
+      ? [...foundPath, { ...destination, explicit: false, snapped: false }]
+      : foundPath;
     const terrainPath = token.createTerrainMovementPath(movementPath, { preview });
     const measurement = token.measureMovementPath(terrainPath, { preview });
     const cost = measurement.cost ?? measurement.distance;
