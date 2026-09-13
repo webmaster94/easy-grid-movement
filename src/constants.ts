@@ -1,5 +1,6 @@
 export const MODULE_ID = "easy-grid-movement";
 export const DEBUG_SETTING = "debug";
+export const CONFIRM_DASH_SETTING = "confirmDash";
 
 export const STYLES = {
   walk: {

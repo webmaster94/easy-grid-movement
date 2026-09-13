@@ -33,6 +33,8 @@ interface MovementMeasurement {
 }
 
 interface TokenDocument {
+  getFlag(scope: string, key: string): unknown;
+  setFlag(scope: string, key: string, value: unknown): Promise<unknown>;
   id: string | null;
   x: number;
   y: number;
@@ -55,6 +57,8 @@ interface Token {
   name: string;
   document: TokenDocument;
   actor?: {
+    isOwner?: boolean;
+    statuses?: ReadonlySet<string>;
     system?: {
       attributes?: {
         movement?: {
@@ -116,6 +120,7 @@ interface GridOffset {
 }
 
 interface HooksApi {
+  on(hook: "updateActor" | "createActiveEffect" | "updateActiveEffect" | "deleteActiveEffect", callback: () => unknown): number;
   once(hook: "init", callback: () => unknown): number;
   on(hook: "updateCombat", callback: (combat: unknown, changes: Record<string, unknown>) => unknown): number;
   on(hook: "deleteCombat", callback: () => unknown): number;
@@ -130,7 +135,8 @@ interface HooksApi {
 declare const Hooks: HooksApi;
 
 declare const game: {
-  combat?: { started?: boolean } | null;
+  combat?: { id?: string; round?: number; turn?: number; started?: boolean } | null;
+  modules?: { get(id: string): { active?: boolean } | undefined };
   i18n: { localize(key: string): string };
   settings: {
     get(moduleId: string, key: string): unknown;
@@ -139,6 +145,15 @@ declare const game: {
   keybindings: {
     register(moduleId: string, key: string, data: Record<string, unknown>): void;
   };
+};
+
+declare const foundry: {
+  applications: { api: { DialogV2: {
+    confirm(options: {
+      window: { title: string }; content: string; modal: boolean; rejectClose: boolean;
+      yes: { label: string }; no: { label: string; default: boolean };
+    }): Promise<boolean | null>;
+  } } };
 };
 
 declare const canvas: {

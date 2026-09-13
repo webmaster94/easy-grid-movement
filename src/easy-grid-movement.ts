@@ -1,4 +1,5 @@
-import { DEBUG_SETTING, MODULE_ID } from "./constants";
+import { CONFIRM_DASH_SETTING, DEBUG_SETTING, MODULE_ID } from "./constants";
+import { DashController, movementTurnKey, type DashReservation } from "./dash";
 import { stepElevation } from "./elevation";
 import {
   cellsWithin,
@@ -41,6 +42,7 @@ interface ResolvedMovementPath {
 
 export class EasyGridMovement {
   readonly #renderer = new MovementRenderer();
+  readonly #dash = new DashController();
   readonly #tracker = new MovementTracker(
     (tokenId) => this.refresh(tokenId),
     (tokenId) => this.#active && tokenId === this.#tokenId,
@@ -70,6 +72,12 @@ export class EasyGridMovement {
     if (this.#initialized) return;
     this.#initialized = true;
 
+    game.settings.register(MODULE_ID, CONFIRM_DASH_SETTING, {
+      name: game.i18n.localize("EGM.Settings.ConfirmDashName"),
+      hint: game.i18n.localize("EGM.Settings.ConfirmDashHint"),
+      scope: "user", config: true, type: Boolean, default: true, requiresReload: false,
+    });
+
     game.settings.register(MODULE_ID, DEBUG_SETTING, {
       name: game.i18n.localize("EGM.Settings.DebugName"),
       hint: game.i18n.localize("EGM.Settings.DebugHint"),
@@ -91,7 +99,7 @@ export class EasyGridMovement {
 
     Hooks.on("controlToken", (token, controlled) => {
       if (controlled && this.#active) {
-        if (!game.combat?.started) this.#tracker.reset(token.id);
+        if (!game.combat?.started) { this.#tracker.reset(token.id); this.#dash.reset(token.id); }
         this.#tokenId = token.id;
         this.#clearWaypoints();
         this.draw(token);
@@ -108,6 +116,10 @@ export class EasyGridMovement {
     Hooks.on("updateToken", (document, changes) => {
       if ("movementAction" in changes && document.id) this.refresh(document.id);
     });
+    Hooks.on("updateActor", () => this.refresh());
+    for (const hook of ["createActiveEffect", "updateActiveEffect", "deleteActiveEffect"] as const) {
+      Hooks.on(hook, () => this.refresh());
+    }
     this.#tracker.initialize();
   }
 
@@ -123,7 +135,7 @@ export class EasyGridMovement {
       return;
     }
 
-    if (!game.combat?.started) this.#tracker.reset(token.id);
+    if (!game.combat?.started) { this.#tracker.reset(token.id); this.#dash.reset(token.id); }
     this.#active = true;
     this.#tokenId = token.id;
     this.draw(token);
@@ -165,9 +177,10 @@ export class EasyGridMovement {
     }
 
     const moved = this.#tracker.getMovedDistance(token);
-    const remainingWalk = Math.max(0, speed - moved);
-    const remainingDash = Math.max(0, speed * 2 - moved);
-    const remainingOver = Math.max(0, speed * 3 - moved);
+    const bonus = this.#dash.bonus(token);
+    const remainingWalk = Math.max(0, speed + bonus - moved);
+    const remainingDash = Math.max(0, speed * 2 + bonus - moved);
+    const remainingOver = Math.max(0, speed * 3 + bonus - moved);
     if (remainingOver <= 0) {
       this.#plan = null;
       this.#renderer.clear();
@@ -250,24 +263,40 @@ export class EasyGridMovement {
         : this.#planningOrigin(token).elevation;
     this.#moving = true;
     let moveStarted = false;
+    let dash: DashReservation | null = null;
+    let completed = false;
+    const origin = { ...token.document._source };
+    const action = token.document.movementAction;
+    const speed = this.#getMovementSpeed(token);
+    const turn = movementTurnKey();
+    const isCurrent = (): boolean => this.#active && plan === this.#plan && turn === movementTurnKey()
+      && action === token.document.movementAction && speed === this.#getMovementSpeed(token)
+      && this.#samePosition(origin, token.document._source);
     try {
-      const resolved = await this.#resolveMovementPath(token, path, elevation, false);
-      if (!this.#active || plan !== this.#plan) return;
+      let resolved = await this.#resolveMovementPath(token, path, elevation, false);
+      if (!isCurrent()) return;
       if (!resolved) {
         ui.notifications.warn(game.i18n.localize("EGM.Notify.PathBlocked"));
         return;
       }
       if (resolved.cost <= 0.01 && this.#samePosition(token.document._source, resolved.destination)) return;
+      if (resolved.cost > plan.remainingWalk + 0.01) {
+        dash = await this.#dash.reserve(token, speed, resolved.cost > plan.remainingDash + 0.01, isCurrent);
+        if (!dash || !isCurrent()) return;
+        // The dialog can remain open while the scene changes. Recheck the complete route.
+        const checked = await this.#resolveMovementPath(token, path, elevation, false);
+        if (!isCurrent()) return;
+        if (!checked || Math.abs(checked.cost - resolved.cost) > 0.01) {
+          ui.notifications.warn(game.i18n.localize("EGM.Notify.PathBlocked"));
+          return;
+        }
+        resolved = checked;
+      }
       this.#renderer.clearPreview();
       this.#tracker.beginPlannedMove(token.id, resolved.cost);
       moveStarted = true;
       const descending = resolved.movementPath.some((waypoint, index, all) =>
         index > 0 && waypoint.elevation < all[index - 1]!.elevation - 0.01);
-      const origin = {
-        x: token.document._source.x,
-        y: token.document._source.y,
-        elevation: token.document._source.elevation,
-      };
       const movementWaypoints = resolved.movementPath.slice(1).map((waypoint, index, all) => ({
         ...waypoint,
         checkpoint: waypoint.checkpoint || index === all.length - 1,
@@ -299,6 +328,7 @@ export class EasyGridMovement {
         throw new Error("Foundry did not apply the requested token movement");
       }
       this.#tracker.finishPlannedMove(token.id);
+      completed = true;
       this.#clearWaypoints();
       moveStarted = false;
     } catch (error) {
@@ -306,6 +336,12 @@ export class EasyGridMovement {
       console.error("[Easy Grid Movement] Failed to move token", error);
       ui.notifications.error(game.i18n.localize("EGM.Notify.MoveFailed"));
     } finally {
+      try {
+        if (!completed) await dash?.rollback();
+      } catch (error) {
+        console.error("[Easy Grid Movement] Failed to return the Dash action", error);
+        ui.notifications.error(game.i18n.localize("EGM.Notify.DashRefundFailed"));
+      }
       this.#moving = false;
       this.#resetDestinationPreview();
       this.refresh();

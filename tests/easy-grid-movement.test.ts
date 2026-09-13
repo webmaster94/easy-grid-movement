@@ -9,6 +9,7 @@ vi.mock("../src/renderer", () => ({ MovementRenderer: class {
   showPreview = renderer.showPreview;
 } }));
 import { EasyGridMovement } from "../src/easy-grid-movement";
+import { CONFIRM_DASH_SETTING } from "../src/constants";
 
 function handlers(): MovementRendererHandlers {
   return renderer.draw.mock.lastCall?.[4] as MovementRendererHandlers;
@@ -18,6 +19,9 @@ describe("movement interaction", () => {
   let movement: EasyGridMovement;
   let token: Token;
   let update: ReturnType<typeof vi.fn>;
+  let confirm: ReturnType<typeof vi.fn<(options: unknown) => Promise<boolean | null>>>;
+  let confirmEnabled: boolean;
+  let register: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -26,6 +30,8 @@ describe("movement interaction", () => {
     token = {
       id: "token", name: "Test token",
       document: {
+        getFlag: () => undefined,
+        setFlag: () => Promise.resolve(),
         id: "token", ...source, inCombat: false, movementAction: "fly", detectionModes: {}, _source: source,
         getCenterPoint: (p = source) => ({ x: p.x! + 50, y: p.y! + 50 }),
         getMovementOrigin: (p = source) => ({ x: p.x!, y: p.y! }),
@@ -51,7 +57,12 @@ describe("movement interaction", () => {
       Object.assign(source, options.movement.token!.waypoints.at(-1));
       return Promise.resolve([]);
     });
-    vi.stubGlobal("game", { settings: { get: () => false }, i18n: { localize: (s: string) => s } });
+    confirmEnabled = true;
+    register = vi.fn();
+    confirm = vi.fn<(options: unknown) => Promise<boolean | null>>().mockResolvedValue(true);
+    vi.stubGlobal("foundry", { applications: { api: { DialogV2: { confirm } } } });
+    vi.stubGlobal("Hooks", { on: vi.fn() });
+    vi.stubGlobal("game", { settings: { register, get: (_id: string, key: string) => key === CONFIRM_DASH_SETTING ? confirmEnabled : false }, keybindings: { register: vi.fn() }, i18n: { localize: (s: string) => s } });
     vi.stubGlobal("CONFIG", { DND5E: { movementTypes: { walk: {}, fly: {}, burrow: {}, swim: { walkFallback: true }, climb: { walkFallback: true } } }, Canvas: { elevationSnappingPrecision: 4 } });
     vi.stubGlobal("ui", { notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
     vi.stubGlobal("canvas", {
@@ -200,5 +211,79 @@ describe("movement interaction", () => {
     const walk = renderer.draw.mock.lastCall?.[0] as Set<string>;
     expect(walk.has("0,2")).toBe(true);
     expect(walk.has("0,3")).toBe(false);
+  });
+
+  it("registers Dash confirmation per player without requiring a reload", () => {
+    movement.initialize();
+    expect(register).toHaveBeenCalledWith("easy-grid-movement", "confirmDash", expect.objectContaining({
+      scope: "user", default: true, config: true, requiresReload: false,
+    }));
+  });
+
+  it("does not ask to Dash within green movement", async () => {
+    await movement.moveTo("0,6");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, null])("canceling or closing the Dash dialog preserves the token and planned waypoints (%s)", async answer => {
+    confirm.mockResolvedValue(answer);
+    await movement.addWaypoint("0,6");
+    expect(confirm).not.toHaveBeenCalled();
+    await movement.moveTo("0,7");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(update).not.toHaveBeenCalled();
+    expect(movement.active).toBe(true);
+    expect(renderer.showPreview.mock.lastCall?.[0]).toMatchObject({ cost: 30, waypoints: [{ x: 650, y: 50 }] });
+  });
+
+  it("pays for a Dash once and uses its remaining allowance for later clicks", async () => {
+    await movement.moveTo("0,7");
+    await movement.moveTo("0,8");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(2);
+    const walk = renderer.draw.mock.lastCall?.[0] as Set<string>;
+    expect(walk.has("4,8")).toBe(true);
+    expect(walk.has("5,8")).toBe(false);
+  });
+
+  it("reads changes to the confirmation preference on the next move", async () => {
+    confirmEnabled = false;
+    await movement.moveTo("0,7");
+    expect(confirm).not.toHaveBeenCalled();
+    // The first Dash is used up after 60 feet; this next leg needs another source.
+    confirmEnabled = true;
+    confirm.mockResolvedValue(false);
+    await movement.moveTo("6,7");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards approval when the token was moved while the dialog was open", async () => {
+    confirm.mockImplementation(() => { token.document._source.x = 100; return Promise.resolve(true); });
+    await movement.moveTo("0,7");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the path after approval and returns the unused Dash allowance", async () => {
+    const original = token.findMovementPath.bind(token);
+    confirm.mockImplementation(() => {
+      token.findMovementPath = path => ({ result: [], promise: Promise.resolve(path.slice(0, 1)), cancel() {} });
+      return Promise.resolve(true);
+    });
+    await movement.moveTo("0,7");
+    expect(update).not.toHaveBeenCalled();
+    token.findMovementPath = original;
+    confirm.mockResolvedValue(false);
+    await movement.moveTo("0,7");
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("warns explicitly when one Dash cannot cover a red route", async () => {
+    confirm.mockResolvedValue(false);
+    await movement.moveTo("6,7");
+    const options = confirm.mock.lastCall?.[0] as { content: string };
+    expect(options.content).toContain("EGM.Dash.OverRange");
+    expect(update).not.toHaveBeenCalled();
   });
 });

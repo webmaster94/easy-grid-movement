@@ -9,6 +9,7 @@ The interaction model follows the [XCOM 2 manual](https://www.feralinteractive.c
 - Movement ranges follow the action selected in the token's right-click menu, including flying, swimming, climbing, and burrowing. Walking fallback and movement costs follow the D&D 5e ruler.
 - Ctrl-click to pin a waypoint without moving. Continue hovering or adding waypoints to plan the route, then click without Ctrl to move along the whole path. Command-click also works on macOS.
 - Right-click anywhere on the canvas to remove the last waypoint. With no waypoints left, right-click closes the overlay.
+- Committing a route beyond the remaining green range asks whether to use Dash. Canceling or closing the dialog keeps the token and planned waypoints in place. Planning waypoints alone never spends an action.
 - Movement spent during the current combat turn is subtracted immediately.
 - Paths are rendered from the center of the token's footprint and show green, yellow, and red segments as cumulative cost crosses each movement threshold. Over-range cells do not receive a red grid highlight.
 - Movement ranges use Foundry v14's native grid-highlight layer with fully opaque dotted grid edges instead of map-obscuring area fills. Only the green-to-yellow zone transition uses a solid edge; walls, fog, terrain blockers, and other unreachable boundaries remain dotted.
@@ -39,6 +40,18 @@ Choose a movement action from the token's right-click menu before opening the ov
 During combat, movement is tracked until the turn changes. Outside combat, movement is tracked while the overlay remains active; toggle it off and on to begin a fresh planning session.
 
 The key can be changed in Foundry's **Configure Controls** menu. Client-side diagnostic logging is available in **Module Settings**.
+
+## Dash confirmation and BG3 Combat Bar
+
+**Confirm before Dashing** is a personal setting under **Configure Settings → Module Settings → Easy Grid Movement**. It defaults to enabled, is stored per player, and takes effect when saved without reloading. Disabling it skips the confirmation but still spends the Dash action when BG3 Combat Bar is active.
+
+Without BG3 Combat Bar, the confirmation and added movement still work; action tracking remains manual.
+
+With **BG3 Combat Bar** enabled, Easy Grid Movement uses the bar's action-spending functions and token context. The bar owns normal and bonus-action tracking; Midi-QOL is not used to spend Dash. A configured `flags.bg3-combat-bar.actionCosts.dash` bonus-action override is honored, including the wording of the confirmation. If the required action is unavailable, movement is canceled. Linked actors and unlinked tokens use the same action storage as the bar.
+
+A successful Dash adds the selected speed to the token's movement allowance. During combat, that allowance is stored on the token for the current turn and survives closing the overlay or reloading. Later movement within the paid allowance does not spend another action. A Dash already applied through the combat bar's temporary speed effect is also recognized. Outside combat, the allowance lasts for the current overlay session.
+
+The route is checked again after confirmation. If it becomes blocked or movement fails, the unused Dash allowance and reserved action are returned. Routes beyond one Dash retain the existing over-range behavior; the confirmation warns that another source of movement is required, and only one Dash is spent.
 
 ## Installation
 

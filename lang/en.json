@@ -9,9 +9,21 @@
       "NoSpeed": "The selected token has no speed for the selected movement mode.",
       "UnsupportedGrid": "Easy Grid Movement currently supports square-grid scenes only.",
       "PathBlocked": "That movement path is no longer available.",
-      "MoveFailed": "The token could not be moved to that destination."
+      "MoveFailed": "The token could not be moved to that destination.",
+      "NoDashAction": "No action is available for Dash. Restore the required action on the combat bar if another feature grants one.",
+      "DashRefundFailed": "Movement failed, but the Dash action could not be restored. Check the combat bar before trying again."
+    },
+    "Dash": {
+      "Title": "Use Dash?",
+      "ActionPrompt": "This route exceeds your remaining movement. Use your action to Dash and move along this route?",
+      "BonusPrompt": "This route exceeds your remaining movement. Use your bonus action to Dash and move along this route?",
+      "OverRange": "This route also exceeds the movement granted by one Dash. Continuing requires another source of movement; only one Dash will be spent here.",
+      "Confirm": "Dash and move",
+      "Cancel": "Cancel"
     },
     "Settings": {
+      "ConfirmDashName": "Confirm before Dashing",
+      "ConfirmDashHint": "Ask before committing movement beyond your remaining green range. This is your personal setting and applies immediately. Turning it off skips the dialog; Dash still spends the appropriate action when BG3 Combat Bar is active.",
       "DebugName": "Enable debug logging",
       "DebugHint": "Write detailed diagnostic information to the browser console."
     }
