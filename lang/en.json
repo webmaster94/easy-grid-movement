@@ -27,5 +27,9 @@
       "DebugName": "Enable debug logging",
       "DebugHint": "Write detailed diagnostic information to the browser console."
     }
-  }
+  },
+  "EGM.Settings.DetectThreatsName": "Detect Threats when moving",
+  "EGM.Settings.DetectThreatsHint": "Show visible enemies with ranged weapons that can reach your destination. Pause movement when a new threat comes into sight. Changes apply immediately for you.",
+  "EGM.Threats.Detected": "Enemies Detected",
+  "EGM.Threats.Continue": "Click to continue. Right-click to stop."
 }

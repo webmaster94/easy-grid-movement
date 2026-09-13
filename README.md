@@ -53,6 +53,18 @@ A successful Dash adds the selected speed to the token's movement allowance. Dur
 
 The route is checked again after confirmation. If it becomes blocked or movement fails, the unused Dash allowance and reserved action are returned. Routes beyond one Dash retain the existing over-range behavior; the confirmation warns that another source of movement is required, and only one Dash is spent.
 
+## Threat detection
+
+Enable **Detect Threats when moving** under **Configure Settings → Module Settings → Easy Grid Movement**. This personal setting defaults to off and applies immediately when saved.
+
+While hovering a destination, enemies you can see from your token's current position are outlined and shaded red if an equipped ranged weapon can reach that destination. A red line means normal range; yellow means long range. The closest applicable range band across their weapons is used. Thrown weapon attacks count; spells and melee-only attacks do not. Walls block the attack lines, and distances include elevation and the scene's grid measurement rules.
+
+When you commit a route, movement pauses at the first sampled position where a previously unseen ranged threat comes into sight. **Enemies Detected** appears on the selected destination with the newly available threat lines. Click again to continue along the saved route. Right-click cancels the remainder and leaves the overlay open for a new plan. Movement already completed stays spent; Dash is requested only when the segment being moved requires it. The remaining route is checked again before continuing.
+
+Enemies are tokens with the opposite friendly/hostile disposition. Neutral, secret, GM-hidden, dead, and incapacitated tokens are excluded. Visibility uses the moving token's sight and lighting, even for the GM, rather than another party member's vision. The preview does not reveal enemies behind walls or alter explored fog. Detection checks at most a quarter-square between positions along the route, so the stop can fall between grid squares.
+
+Ranges come from D&D 5e weapon attack activities, including activity range overrides and metric conversions. The display shows potential weapon range; it does not predict attack rolls or track ammunition.
+
 ## Installation
 
 Paste this manifest URL into Foundry's **Install Module** dialog:

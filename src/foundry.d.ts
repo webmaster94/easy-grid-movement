@@ -1,3 +1,18 @@
+interface RangedWeaponData {
+  type: string;
+  system: {
+    equipped?: boolean;
+    quantity?: number;
+    range?: { value?: number | string | null; long?: number | string | null; units?: string; override?: boolean };
+    activities?: Iterable<{
+      type: string;
+      attack?: { type?: { value?: string; classification?: string } };
+      validAttackTypes?: ReadonlySet<string>;
+      range?: RangedWeaponData["system"]["range"];
+    }>;
+  };
+}
+
 interface Point {
   x: number;
   y: number;
@@ -33,6 +48,10 @@ interface MovementMeasurement {
 }
 
 interface TokenDocument {
+  disposition?: number;
+  hidden?: boolean;
+  getVisionOrigin?(data?: Partial<MovementWaypoint>): Point;
+  getVisibilityTestPoints?(data?: Partial<MovementWaypoint>): Point[];
   getFlag(scope: string, key: string): unknown;
   setFlag(scope: string, key: string, value: unknown): Promise<unknown>;
   id: string | null;
@@ -53,10 +72,14 @@ interface TokenDocument {
 }
 
 interface Token {
+  hasSight?: boolean;
+  _getVisionSourceData?(): Record<string, unknown>;
+  _getVisionBlindedStates?(): Record<string, boolean>;
   id: string;
   name: string;
   document: TokenDocument;
   actor?: {
+    items?: Iterable<RangedWeaponData>;
     isOwner?: boolean;
     statuses?: ReadonlySet<string>;
     system?: {
@@ -97,6 +120,12 @@ interface Token {
 
 interface VisionSource {
   active: boolean;
+  suppressed?: boolean;
+  data?: { disabled?: boolean };
+  isBlinded?: boolean;
+  blinded?: Record<string, boolean>;
+  initialize?(data: Record<string, unknown>): void;
+  destroy?(): void;
 }
 
 interface VisibilityTestConfig {
@@ -201,7 +230,7 @@ declare const canvas: {
     tokenVision: boolean;
     _createVisibilityTestConfig(
       points: Point | Point[],
-      options?: { tolerance?: number },
+      options?: { tolerance?: number; object?: Token },
     ): VisibilityTestConfig;
   };
 };
@@ -209,6 +238,7 @@ declare const canvas: {
 declare const CONFIG: {
   DND5E?: { movementTypes: Record<string, { walkFallback?: boolean }> };
   Canvas: {
+    visionSourceClass?: new (options: { object: Token; sourceId: string }) => VisionSource;
     elevationSnappingPrecision: number;
     detectionModes: Record<
       string,
@@ -225,7 +255,7 @@ declare const CONFIG: {
 
 declare const ui: {
   notifications: {
-    info(message: string): void;
+    info(this: void, message: string): void;
     warn(this: void, message: string): void;
     error(message: string): void;
   };

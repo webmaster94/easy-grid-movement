@@ -1,6 +1,7 @@
 import { MODULE_ID, STYLES } from "./constants";
 import { parseOffsetKey, type GridOffset } from "./grid";
 import type { MovementBand } from "./movement-band";
+import type { Threat } from "./threats";
 
 type RegionStyle = (typeof STYLES)[MovementBand];
 type HighlightZone = "walk" | "dash";
@@ -32,11 +33,14 @@ export interface MovementPreview {
   elevation: number;
   elevationDelta: number;
   destinationBand: MovementBand;
+  threats?: readonly Threat[];
+  enemiesDetected?: boolean;
 }
 
 export class MovementRenderer {
   #container: PIXI.Container | null = null;
   #previewGraphics: PIXI.Graphics | null = null;
+  #threatGraphics: PIXI.Graphics | null = null;
   #distanceLabel: PIXI.Text | null = null;
   #hoveredKey: string | null = null;
   #previousGridInteraction: boolean | null = null;
@@ -55,6 +59,7 @@ export class MovementRenderer {
     }
     this.#container = null;
     this.#previewGraphics = null;
+    this.#threatGraphics = null;
     this.#distanceLabel = null;
     this.#hoveredKey = null;
     this.#previousGridInteraction = null;
@@ -113,6 +118,11 @@ export class MovementRenderer {
     this.#previewGraphics.zIndex = 10;
     this.#container.addChild(this.#previewGraphics);
 
+    this.#threatGraphics = new PIXI.Graphics();
+    this.#threatGraphics.eventMode = "none";
+    this.#threatGraphics.zIndex = 12;
+    this.#container.addChild(this.#threatGraphics);
+
     this.#distanceLabel = new PIXI.Text("", {
       align: "center",
       fill: 0xffffff,
@@ -159,6 +169,17 @@ export class MovementRenderer {
     if (!this.#previewGraphics || !this.#distanceLabel || preview.path.length === 0) return;
     const graphics = this.#previewGraphics;
     graphics.clear();
+    this.#threatGraphics?.clear();
+    for (const threat of preview.threats ?? []) {
+      const g = this.#threatGraphics;
+      if (!g) break;
+      g.lineStyle(3, threat.band === "short" ? 0xff3333 : 0xffcc00, 1);
+      g.moveTo(threat.from.x, threat.from.y).lineTo(threat.to.x, threat.to.y);
+      g.lineStyle(3, 0xff3333, 1);
+      g.beginFill(0xff3333, 0.2);
+      g.drawRect(threat.bounds.x, threat.bounds.y, threat.bounds.width, threat.bounds.height);
+      g.endFill();
+    }
     graphics.lineStyle(7, 0x000000, 0.8, 0.5);
     this.#drawPath(graphics, preview.path, preview.difficultSegments);
     for (let index = 1; index < preview.path.length; index += 1) {
@@ -191,13 +212,15 @@ export class MovementRenderer {
     const elevationLabel = preview.elevationDelta === 0
       ? ""
       : `\n↕ ${this.#formatSigned(preview.elevationDelta)} ${units} (${this.#formatDistance(preview.elevation)} ${units})`;
-    this.#distanceLabel.text = `${distanceLabel}${elevationLabel}`;
+    const detected = preview.enemiesDetected ? `\n${game.i18n.localize("EGM.Threats.Detected")}\n${game.i18n.localize("EGM.Threats.Continue")}` : "";
+    this.#distanceLabel.text = `${distanceLabel}${elevationLabel}${detected}`;
     this.#distanceLabel.position.set(finalPoint.x, finalPoint.y - canvas.grid.size * 0.15);
     this.#distanceLabel.visible = true;
   }
 
   clearPreview(): void {
     this.#previewGraphics?.clear();
+    this.#threatGraphics?.clear();
     if (this.#distanceLabel) this.#distanceLabel.visible = false;
   }
 
