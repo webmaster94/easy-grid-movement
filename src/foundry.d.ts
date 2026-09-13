@@ -58,7 +58,7 @@ interface Token {
     system?: {
       attributes?: {
         movement?: {
-          walk?: number | string | null;
+          [action: string]: number | string | boolean | null | undefined;
         };
       };
     };
@@ -75,7 +75,7 @@ interface Token {
   ): boolean | unknown[] | object | null;
   constrainMovementPath(
     waypoints: MovementWaypoint[],
-    options: { preview?: boolean; ignoreCost?: boolean; ignoreTokens?: boolean },
+    options: { preview?: boolean; ignoreCost?: boolean; ignoreTokens?: boolean; ignoreWalls?: boolean },
   ): [MovementWaypoint[], boolean];
   createTerrainMovementPath(
     waypoints: MovementWaypoint[],
@@ -102,6 +102,7 @@ interface VisibilityTestConfig {
 }
 
 interface TokenUpdate {
+  movementAction?: string | null;
   x?: number;
   y?: number;
   elevation?: number;
@@ -191,6 +192,7 @@ declare const canvas: {
 };
 
 declare const CONFIG: {
+  DND5E?: { movementTypes: Record<string, { walkFallback?: boolean }> };
   Canvas: {
     elevationSnappingPrecision: number;
     detectionModes: Record<
@@ -209,7 +211,7 @@ declare const CONFIG: {
 declare const ui: {
   notifications: {
     info(message: string): void;
-    warn(message: string): void;
+    warn(this: void, message: string): void;
     error(message: string): void;
   };
 };
@@ -243,6 +245,8 @@ declare namespace PIXI {
 
   interface FederatedPointerEvent {
     button: number;
+    ctrlKey: boolean;
+    metaKey: boolean;
     stopPropagation(): void;
   }
 

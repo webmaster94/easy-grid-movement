@@ -6,7 +6,7 @@
     },
     "Notify": {
       "NoToken": "Select a token first.",
-      "NoSpeed": "The selected token has no walking speed.",
+      "NoSpeed": "The selected token has no speed for the selected movement mode.",
       "UnsupportedGrid": "Easy Grid Movement currently supports square-grid scenes only.",
       "PathBlocked": "That movement path is no longer available.",
       "MoveFailed": "The token could not be moved to that destination."

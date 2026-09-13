@@ -53,6 +53,10 @@ export class EasyGridMovement {
   #previewElevation: number | null = null;
   #previewRequestId = 0;
   #tokenId: string | null = null;
+  #waypoints: ResolvedMovementPath[] = [];
+  #editing = false;
+  #editRequestId = 0;
+  #origin: MovementWaypoint | null = null;
 
   get active(): boolean {
     return this.#active;
@@ -89,6 +93,7 @@ export class EasyGridMovement {
       if (controlled && this.#active) {
         if (!game.combat?.started) this.#tracker.reset(token.id);
         this.#tokenId = token.id;
+        this.#clearWaypoints();
         this.draw(token);
       } else if (!controlled && this.#active && canvas.tokens.controlled.length === 0) {
         this.deactivate();
@@ -99,7 +104,10 @@ export class EasyGridMovement {
       this.refresh();
     });
     Hooks.on("sightRefresh", () => this.refresh());
-    Hooks.on("canvasTearDown", () => this.#renderer.clear());
+    Hooks.on("canvasTearDown", () => this.deactivate());
+    Hooks.on("updateToken", (document, changes) => {
+      if ("movementAction" in changes && document.id) this.refresh(document.id);
+    });
     this.#tracker.initialize();
   }
 
@@ -124,6 +132,7 @@ export class EasyGridMovement {
   deactivate(): void {
     this.#active = false;
     this.#plan = null;
+    this.#clearWaypoints();
     this.#resetDestinationPreview();
     this.#tokenId = null;
     this.#renderer.clear();
@@ -138,13 +147,17 @@ export class EasyGridMovement {
   }
 
   draw(token: Token): void {
+    if (this.#origin && !this.#samePosition(this.#origin, token.document._source)) this.#clearWaypoints();
+    this.#origin = { ...token.document._source };
+    this.#plan = null;
+    this.#resetDestinationPreview();
     if (!canvas.grid?.isSquare) {
       this.#renderer.clear();
       ui.notifications.warn(game.i18n.localize("EGM.Notify.UnsupportedGrid"));
       return;
     }
 
-    const speed = this.#getWalkSpeed(token);
+    const speed = this.#getMovementSpeed(token);
     if (speed <= 0) {
       this.#renderer.clear();
       ui.notifications.warn(game.i18n.localize("EGM.Notify.NoSpeed"));
@@ -164,11 +177,14 @@ export class EasyGridMovement {
     this.#plan = this.calculatePlan(token, remainingWalk, remainingDash, remainingOver);
     this.#renderer.draw(this.#plan.walk, this.#plan.dash, this.#plan.over, this.#plan.difficult, {
       onHover: (key) => this.#hoverDestination(token, key),
-      onLeave: () => this.#resetDestinationPreview(),
+      onLeave: () => this.#leaveDestination(token),
       onElevation: (key, wheelDelta, precise) =>
         this.#adjustPreviewElevation(token, key, wheelDelta, precise),
-      onSelect: (key) => void this.moveTo(key),
+      onSelect: (key, waypoint) => void (waypoint ? this.addWaypoint(key) : this.moveTo(key)),
+      onCancel: () => this.removeWaypoint(),
     });
+    const pinned = this.#waypoints.at(-1);
+    if (pinned) this.#renderPreview(token, pinned, this.#plan);
     this.#debug(
       `${token.name}: speed ${speed}, moved ${moved}, walk destinations ${this.#plan.walk.size}, ` +
         `dash destinations ${this.#plan.dash.size}, over-range destinations ${this.#plan.over.size}.`,
@@ -181,7 +197,8 @@ export class EasyGridMovement {
     dashDistance: number,
     overDistance = dashDistance,
   ): MovementPlan {
-    const start = canvas.grid.getOffset({ x: token.document._source.x, y: token.document._source.y });
+    const start = canvas.grid.getOffset(this.#planningOrigin(token));
+    const plannedCost = this.#waypoints.at(-1)?.cost ?? 0;
     const startKey = offsetKey(start);
     const difficult = new Set<string>();
     const adapter: ReachabilityAdapter = {
@@ -200,8 +217,8 @@ export class EasyGridMovement {
       canTraverse: (from, to) => this.#canTraverse(token, from, to),
     };
     const reachability = findReachability(start, overDistance, adapter);
-    const walkRange = cellsWithin(reachability.costs, walkDistance);
-    const dashRange = cellsWithin(reachability.costs, dashDistance);
+    const walkRange = cellsWithin(reachability.costs, walkDistance - plannedCost);
+    const dashRange = cellsWithin(reachability.costs, dashDistance - plannedCost);
     const overRange = cellsWithin(reachability.costs, overDistance);
     const visible = new Set([...overRange].filter((key) => this.#canSeeCell(token, key)));
     const walk = new Set([...walkRange].filter((key) => visible.has(key)));
@@ -222,18 +239,20 @@ export class EasyGridMovement {
   }
 
   async moveTo(destinationKey: string): Promise<void> {
-    if (this.#moving || !this.#plan || !this.#tokenId) return;
+    if (this.#moving || this.#editing || !this.#plan || !this.#tokenId) return;
+    const plan = this.#plan;
     const token = canvas.tokens.get(this.#tokenId);
     const path = this.#plan.reachability.paths.get(destinationKey);
     if (!token || !path) return;
     const elevation =
       this.#previewDestinationKey === destinationKey && this.#previewElevation !== null
         ? this.#previewElevation
-        : token.document._source.elevation;
+        : this.#planningOrigin(token).elevation;
     this.#moving = true;
     let moveStarted = false;
     try {
       const resolved = await this.#resolveMovementPath(token, path, elevation, false);
+      if (!this.#active || plan !== this.#plan) return;
       if (!resolved) {
         ui.notifications.warn(game.i18n.localize("EGM.Notify.PathBlocked"));
         return;
@@ -242,7 +261,8 @@ export class EasyGridMovement {
       this.#renderer.clearPreview();
       this.#tracker.beginPlannedMove(token.id, resolved.cost);
       moveStarted = true;
-      const descending = resolved.destination.elevation < token.document._source.elevation - 0.01;
+      const descending = resolved.movementPath.some((waypoint, index, all) =>
+        index > 0 && waypoint.elevation < all[index - 1]!.elevation - 0.01);
       const origin = {
         x: token.document._source.x,
         y: token.document._source.y,
@@ -250,7 +270,7 @@ export class EasyGridMovement {
       };
       const movementWaypoints = resolved.movementPath.slice(1).map((waypoint, index, all) => ({
         ...waypoint,
-        checkpoint: index === all.length - 1,
+        checkpoint: waypoint.checkpoint || index === all.length - 1,
       }));
       await canvas.scene.updateEmbeddedDocuments(
         "Token",
@@ -272,12 +292,14 @@ export class EasyGridMovement {
         },
       );
       const destinationApplied = await this.#waitForPosition(token, resolved.destination, 5000);
-      if (!destinationApplied || this.#samePosition(token.document._source, origin)) {
+      const returnsToOrigin = this.#samePosition(resolved.destination, origin);
+      if (!destinationApplied || (!returnsToOrigin && this.#samePosition(token.document._source, origin))) {
         this.#tracker.cancelPlannedMove(token.id);
         moveStarted = false;
         throw new Error("Foundry did not apply the requested token movement");
       }
       this.#tracker.finishPlannedMove(token.id);
+      this.#clearWaypoints();
       moveStarted = false;
     } catch (error) {
       if (moveStarted) this.#tracker.cancelPlannedMove(token.id);
@@ -291,10 +313,68 @@ export class EasyGridMovement {
     }
   }
 
+  async addWaypoint(destinationKey: string): Promise<void> {
+    if (this.#moving || this.#editing || !this.#plan || !this.#tokenId) return;
+    const token = canvas.tokens.get(this.#tokenId);
+    const plan = this.#plan;
+    const path = plan.reachability.paths.get(destinationKey);
+    if (!token || !path) return;
+    const elevation = this.#previewDestinationKey === destinationKey && this.#previewElevation !== null
+      ? this.#previewElevation : this.#planningOrigin(token).elevation;
+    const requestId = ++this.#editRequestId;
+    this.#editing = true;
+    try {
+      const resolved = await this.#resolveMovementPath(token, path, elevation, true);
+      if (requestId !== this.#editRequestId || plan !== this.#plan || !this.#active) return;
+      if (!resolved) {
+        ui.notifications.warn(game.i18n.localize("EGM.Notify.PathBlocked"));
+        return;
+      }
+      if (this.#samePosition(this.#planningOrigin(token), resolved.destination)) return;
+      resolved.movementPath.at(-1)!.checkpoint = true;
+      this.#waypoints.push(resolved);
+      this.draw(token);
+    } catch (error) {
+      this.#debug("Waypoint planning failed.", error);
+      ui.notifications.warn(game.i18n.localize("EGM.Notify.PathBlocked"));
+    } finally {
+      if (requestId === this.#editRequestId) this.#editing = false;
+    }
+  }
+
+  removeWaypoint(): void {
+    if (this.#moving) return;
+    this.#editRequestId += 1;
+    this.#editing = false;
+    if (!this.#waypoints.length) {
+      this.deactivate();
+      return;
+    }
+    this.#waypoints.pop();
+    this.refresh();
+  }
+
+  #clearWaypoints(): void {
+    this.#waypoints = [];
+    this.#editRequestId += 1;
+    this.#editing = false;
+    this.#origin = null;
+  }
+
+  #planningOrigin(token: Token): MovementWaypoint {
+    return this.#waypoints.at(-1)?.destination ?? token.document._source;
+  }
+
+  #leaveDestination(token: Token): void {
+    this.#resetDestinationPreview();
+    const pinned = this.#waypoints.at(-1);
+    if (pinned && this.#plan) this.#renderPreview(token, pinned, this.#plan);
+  }
+
   #hoverDestination(token: Token, destinationKey: string): void {
     if (destinationKey !== this.#previewDestinationKey) {
       this.#previewDestinationKey = destinationKey;
-      this.#previewElevation = token.document._source.elevation;
+      this.#previewElevation = this.#planningOrigin(token).elevation;
     }
     void this.#showPreview(token, destinationKey);
   }
@@ -308,11 +388,11 @@ export class EasyGridMovement {
     if (!this.#plan?.reachability.paths.has(destinationKey)) return;
     if (destinationKey !== this.#previewDestinationKey) {
       this.#previewDestinationKey = destinationKey;
-      this.#previewElevation = token.document._source.elevation;
+      this.#previewElevation = this.#planningOrigin(token).elevation;
     }
     const precision = precise ? Math.max(1, CONFIG.Canvas.elevationSnappingPrecision) : 1;
     const interval = canvas.dimensions.distance / precision;
-    const current = this.#previewElevation ?? token.document._source.elevation;
+    const current = this.#previewElevation ?? this.#planningOrigin(token).elevation;
     const elevation = stepElevation(current, wheelDelta, interval);
     const destination = token._getDragWaypointPosition(
       this.#waypoint(token, parseOffsetKey(destinationKey)),
@@ -327,7 +407,8 @@ export class EasyGridMovement {
     const plan = this.#plan;
     const path = plan?.reachability.paths.get(destinationKey);
     if (!path || !plan) return;
-    const elevation = this.#previewElevation ?? token.document._source.elevation;
+    if (this.#moving) return;
+    const elevation = this.#previewElevation ?? this.#planningOrigin(token).elevation;
     const requestId = ++this.#previewRequestId;
     let resolved: ResolvedMovementPath | null;
     try {
@@ -346,8 +427,14 @@ export class EasyGridMovement {
       if (requestId === this.#previewRequestId) this.#renderer.clearPreview();
       return;
     }
+    this.#renderPreview(token, resolved, plan);
+  }
+
+  #renderPreview(token: Token, resolved: ResolvedMovementPath, plan: MovementPlan): void {
+    const elevation = resolved.destination.elevation;
     this.#renderer.showPreview({
       path: resolved.terrainPath.map((waypoint) => token.document.getCenterPoint(waypoint)),
+      waypoints: this.#waypoints.map((waypoint) => token.document.getCenterPoint(waypoint.destination)),
       segmentBands: resolved.measurement.waypoints.slice(1).map((waypoint) =>
         movementBand(waypoint.cost, plan.remainingWalk, plan.remainingDash),
       ),
@@ -355,7 +442,7 @@ export class EasyGridMovement {
         Boolean(waypoint.terrain?.difficultTerrain),
       ),
       cost: resolved.cost,
-      destination: parseOffsetKey(destinationKey),
+      destination: canvas.grid.getOffset(resolved.destination),
       footprint: {
         width: token.document._source.width,
         height: token.document._source.height,
@@ -376,9 +463,10 @@ export class EasyGridMovement {
     const last = waypoints.at(-1);
     if (!last) return null;
     const destination = { ...last, elevation };
-    const descending = elevation < token.document._source.elevation - 0.01;
+    const origin = this.#planningOrigin(token);
+    const descending = elevation < origin.elevation - 0.01;
     const pathDestination = descending
-      ? { ...destination, elevation: token.document._source.elevation }
+      ? { ...destination, elevation: origin.elevation }
       : destination;
     if (waypoints.length === 1) waypoints.push(pathDestination);
     else waypoints[waypoints.length - 1] = pathDestination;
@@ -390,9 +478,24 @@ export class EasyGridMovement {
     const foundPath = await search.promise;
     const final = foundPath.at(-1);
     if (!final || !this.#samePosition(pathDestination, final)) return null;
-    const movementPath = descending
+    const segment = descending
       ? [...foundPath, { ...destination, explicit: false, snapped: false }]
       : foundPath;
+    const prefix = this.#waypoints.at(-1)?.movementPath ?? [];
+    // Recheck saved legs before committing; a wall or occupied cell may have changed.
+    if (!preview) {
+      for (let index = 1; index < prefix.length; index += 1) {
+        const from = prefix[index - 1]!;
+        const to = prefix[index]!;
+        const descent = to.elevation < from.elevation && this.#samePosition(
+          { x: from.x, y: from.y }, { x: to.x, y: to.y });
+        const [checked, constrained] = token.constrainMovementPath([from, to], {
+          preview: false, ignoreCost: true, ignoreWalls: descent, ignoreTokens: false,
+        });
+        if (constrained || !checked.at(-1) || !this.#samePosition(to, checked.at(-1)!)) return null;
+      }
+    }
+    const movementPath = prefix.length ? [...prefix, ...segment.slice(1)] : segment;
     const terrainPath = token.createTerrainMovementPath(movementPath, { preview });
     const measurement = token.measureMovementPath(terrainPath, { preview });
     const cost = measurement.cost ?? measurement.distance;
@@ -409,11 +512,13 @@ export class EasyGridMovement {
 
   #measurePath(token: Token, path: readonly GridOffset[]): PathMeasurement {
     try {
-      const waypoints = path.map((offset) => this.#waypoint(token, offset));
+      const suffix = path.map((offset) => this.#waypoint(token, offset));
+      const pinned = this.#waypoints.at(-1);
+      const waypoints = pinned ? [...pinned.movementPath, ...suffix.slice(1)] : suffix;
       const terrainPath = token.createTerrainMovementPath(waypoints, { preview: true });
       const measurement = token.measureMovementPath(terrainPath, { preview: true });
       return {
-        cost: measurement.cost ?? measurement.distance,
+        cost: (measurement.cost ?? measurement.distance) - (pinned?.cost ?? 0),
         difficult: Boolean(terrainPath.at(-1)?.terrain?.difficultTerrain),
       };
     } catch (error) {
@@ -459,7 +564,7 @@ export class EasyGridMovement {
       if (!visionSource?.active) return false;
       const point = canvas.grid.getTopLeftPoint(parseOffsetKey(key));
       const size = canvas.grid.size;
-      const elevation = token.document._source.elevation;
+      const elevation = this.#planningOrigin(token).elevation;
       const config = canvas.visibility._createVisibilityTestConfig(
         [{ x: point.x + size / 2, y: point.y + size / 2, elevation }],
         { tolerance: 0 },
@@ -493,7 +598,7 @@ export class EasyGridMovement {
     return {
       x: point.x,
       y: point.y,
-      elevation: source.elevation,
+      elevation: this.#planningOrigin(token).elevation,
       width: source.width,
       height: source.height,
       depth: source.depth,
@@ -532,10 +637,18 @@ export class EasyGridMovement {
     );
   }
 
-  #getWalkSpeed(token: Token): number {
-    const value = token.actor?.system?.attributes?.movement?.walk;
-    const speed = typeof value === "number" ? value : Number.parseFloat(String(value ?? 0));
-    return Number.isFinite(speed) ? speed : 0;
+  #getMovementSpeed(token: Token): number {
+    const movement = token.actor?.system?.attributes?.movement;
+    const action = token.document.movementAction;
+    const numericSpeed = (value: unknown): number => {
+      const speed = typeof value === "number" ? value : typeof value === "string" ? Number.parseFloat(value) : 0;
+      return Number.isFinite(speed) ? Math.max(0, speed) : 0;
+    };
+    const speed = numericSpeed(movement?.[action]);
+    const type = CONFIG.DND5E?.movementTypes[action];
+    // Match the system ruler, leaving action-specific cost multipliers to Foundry.
+    return type?.walkFallback || (!type && !["fly", "burrow"].includes(action))
+      ? Math.max(speed, numericSpeed(movement?.walk)) : speed;
   }
 
   #debug(message: string, ...details: unknown[]): void {

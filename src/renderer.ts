@@ -17,11 +17,13 @@ export interface MovementRendererHandlers {
   onHover(key: string): void;
   onLeave(): void;
   onElevation(key: string, wheelDelta: number, precise: boolean): void;
-  onSelect(key: string): void;
+  onSelect(key: string, waypoint: boolean): void;
+  onCancel(): void;
 }
 
 export interface MovementPreview {
   path: readonly Point[];
+  waypoints: readonly Point[];
   segmentBands: readonly MovementBand[];
   difficultSegments: readonly boolean[];
   cost: number;
@@ -39,9 +41,13 @@ export class MovementRenderer {
   #hoveredKey: string | null = null;
   #previousGridInteraction: boolean | null = null;
   #wheelListener: ((event: WheelEvent) => void) | null = null;
+  #cancelListener: ((event: MouseEvent) => void) | null = null;
+  #rightDownListener: ((event: PointerEvent) => void) | null = null;
 
   clear(): void {
     if (this.#wheelListener) window.removeEventListener("wheel", this.#wheelListener, true);
+    if (this.#cancelListener) window.removeEventListener("contextmenu", this.#cancelListener, true);
+    if (this.#rightDownListener) window.removeEventListener("pointerdown", this.#rightDownListener, true);
     if (canvas.interface?.grid) canvas.interface.grid.destroyHighlightLayer(HIGHLIGHT_LAYER);
     this.#container?.destroy({ children: true });
     if (this.#previousGridInteraction !== null && canvas.interface?.grid) {
@@ -53,6 +59,8 @@ export class MovementRenderer {
     this.#hoveredKey = null;
     this.#previousGridInteraction = null;
     this.#wheelListener = null;
+    this.#cancelListener = null;
+    this.#rightDownListener = null;
   }
 
   draw(
@@ -86,6 +94,19 @@ export class MovementRenderer {
       }
     };
     window.addEventListener("wheel", this.#wheelListener, { capture: true, passive: false });
+    this.#cancelListener = (event) => {
+      if (document.elementFromPoint(event.clientX, event.clientY)?.id !== "board") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      handlers.onCancel();
+    };
+    window.addEventListener("contextmenu", this.#cancelListener, true);
+    this.#rightDownListener = (event) => {
+      if (event.button !== 2 || document.elementFromPoint(event.clientX, event.clientY)?.id !== "board") return;
+      // Keep Foundry's right-drag and token HUD handlers out of the undo gesture.
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener("pointerdown", this.#rightDownListener, true);
 
     this.#previewGraphics = new PIXI.Graphics();
     this.#previewGraphics.eventMode = "none";
@@ -128,7 +149,7 @@ export class MovementRenderer {
       target.on("pointertap", (event) => {
         if (event.button !== 0) return;
         event.stopPropagation();
-        handlers.onSelect(key);
+        handlers.onSelect(key, event.ctrlKey || event.metaKey);
       });
       this.#container.addChild(target);
     }
@@ -148,6 +169,11 @@ export class MovementRenderer {
       graphics.lineStyle(4, STYLES[band].borderColor, 1, 0.5);
       this.#drawSegment(graphics, from, to, preview.difficultSegments[index - 1] === true);
     }
+
+    graphics.lineStyle(3, 0xffffff, 1, 0.5);
+    graphics.beginFill(0x000000, 0.8);
+    for (const waypoint of preview.waypoints) graphics.drawCircle(waypoint.x, waypoint.y, canvas.grid.size * 0.08);
+    graphics.endFill();
 
     const destinationPoint = canvas.grid.getTopLeftPoint(preview.destination);
     graphics.lineStyle(5, STYLES[preview.destinationBand].borderColor, 1, 0.5);

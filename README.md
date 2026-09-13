@@ -6,6 +6,9 @@ The interaction model follows the [XCOM 2 manual](https://www.feralinteractive.c
 
 - Hover a destination to see the exact wall-aware route and movement cost.
 - Click any previewable destination to move the token along that route, including a red over-range route.
+- Movement ranges follow the action selected in the token's right-click menu, including flying, swimming, climbing, and burrowing. Walking fallback and movement costs follow the D&D 5e ruler.
+- Ctrl-click to pin a waypoint without moving. Continue hovering or adding waypoints to plan the route, then click without Ctrl to move along the whole path. Command-click also works on macOS.
+- Right-click anywhere on the canvas to remove the last waypoint. With no waypoints left, right-click closes the overlay.
 - Movement spent during the current combat turn is subtracted immediately.
 - Paths are rendered from the center of the token's footprint and show green, yellow, and red segments as cumulative cost crosses each movement threshold. Over-range cells do not receive a red grid highlight.
 - Movement ranges use Foundry v14's native grid-highlight layer with fully opaque dotted grid edges instead of map-obscuring area fills. Only the green-to-yellow zone transition uses a solid edge; walls, fog, terrain blockers, and other unreachable boundaries remain dotted.
@@ -19,7 +22,7 @@ The interaction model follows the [XCOM 2 manual](https://www.feralinteractive.c
 
 - Foundry Virtual Tabletop 14
 - A square-grid scene
-- An actor with a walking speed
+- An actor with a speed for the selected movement action
 
 ## Usage
 
@@ -27,7 +30,11 @@ The interaction model follows the [XCOM 2 manual](https://www.feralinteractive.c
 2. Press `M` to toggle the overlay.
 3. Hover any visible destination to preview its route and cost, including destinations beyond the yellow grid area.
 4. While hovering, scroll the mouse wheel up or down to raise or lower the destination by one grid-distance step. Hold `Shift` while scrolling to use Foundry's precise elevation increment.
-5. Click the selected square to move there. Green, yellow, and red routes are all allowed; the color communicates cost rather than blocking the move.
+5. Click the selected square to move there, or hold `Ctrl` while clicking to pin a waypoint. Hover another square to extend the route from that waypoint. The cost and colors include the full planned path.
+6. Add more waypoints with `Ctrl`-click, or click without `Ctrl` to move along the planned route. Green, yellow, and red routes are all allowed; the color communicates cost rather than blocking the move.
+7. Right-click to undo the last waypoint. Right-click again when no waypoints remain to close the overlay, or press `M` to cancel the entire plan at once.
+
+Choose a movement action from the token's right-click menu before opening the overlay. Pinned waypoints retain their elevation and movement action; later legs use the current selection. Planning does not spend movement until the route is committed.
 
 During combat, movement is tracked until the turn changes. Outside combat, movement is tracked while the overlay remains active; toggle it off and on to begin a fresh planning session.
 
