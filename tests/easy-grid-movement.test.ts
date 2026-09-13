@@ -8,6 +8,7 @@ vi.mock("../src/renderer", () => ({ MovementRenderer: class {
   clearPreview = renderer.clearPreview;
   showPreview = renderer.showPreview;
 } }));
+import { ThreatDetector } from "../src/threats";
 import { EasyGridMovement } from "../src/easy-grid-movement";
 import { CONFIRM_DASH_SETTING, DETECT_THREATS_SETTING } from "../src/constants";
 
@@ -125,6 +126,84 @@ describe("movement interaction", () => {
     expect(token.document._source.x).toBe(600);
     expect(update).toHaveBeenCalledTimes(2);
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("waits for visible animation completion before announcing enemies or rebuilding", async () => {
+    enemy(250);
+    let finish!: () => void;
+    Object.assign(token, { movementAnimationPromise: new Promise<void>(resolve => { finish = resolve; }) });
+    renderer.draw.mockClear();
+    const moving = movement.moveTo("0,6");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(token.document._source.x).toBe(250);
+    expect(movement.moving).toBe(true);
+    expect(ui.notifications.info).not.toHaveBeenCalled();
+    expect(renderer.draw).not.toHaveBeenCalled();
+    finish(); await moving;
+    expect(ui.notifications.info).toHaveBeenCalledWith("EGM.Threats.Detected");
+    expect(renderer.draw).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(renderer.draw).toHaveBeenCalledTimes(1);
+  });
+
+  it("computes other-token footprints once per range search", () => {
+    const foe = enemy();
+    const footprint = vi.spyOn(foe.document, "getOccupiedGridSpaceOffsets");
+    movement.calculatePlan(token, 30, 60, 90);
+    expect(footprint).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves far enough to see a threat's center instead of stopping at a tiny edge glimpse", () => {
+    const foe = enemy();
+    canvas.visibility.tokenVision = true;
+    token._getVisionSourceData = () => ({});
+    token.document.getVisionOrigin = (p) => ({ x: p!.x!, y: p!.y! });
+    foe.document.getVisibilityTestPoints = () => [{ x: 900, y: 500 }];
+    token.document.detectionModes = { basicSight: {} };
+    let originX = 0, targetX = 0;
+    CONFIG.Canvas.visionSourceClass = class {
+      active = false;
+      initialize(data: Record<string, unknown>) { originX = Number(data.x); }
+      destroy() {}
+    };
+    canvas.visibility._createVisibilityTestConfig = points => {
+      targetX = (Array.isArray(points) ? points[0]! : points).x; return {};
+    };
+    CONFIG.Canvas.detectionModes = { basicSight: { testVisibility: () => originX >= (targetX === 950 ? 300 : 200) } };
+    const start = token.document._source;
+    const discovery = new ThreatDetector().firstDiscovery(token, [start, { ...start, x: 600 }]);
+    expect(discovery?.path.at(-1)?.x).toBe(300);
+  });
+
+  it("refreshes sight without repeating native range searches", async () => {
+    movement.initialize();
+    const measure = vi.spyOn(token, "createTerrainMovementPath");
+    const sightRefresh = vi.mocked(Hooks.on).mock.calls.find(call => String(call[0]) === "sightRefresh")?.[1] as (() => void);
+    for (let frame = 0; frame < 20; frame++) sightRefresh();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(measure).not.toHaveBeenCalled();
+  });
+
+  it("yields a large search and discards it when movement mode closes", async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now += 3);
+    try {
+      renderer.draw.mockClear();
+      movement.refresh();
+      expect(renderer.draw).not.toHaveBeenCalled();
+      movement.deactivate();
+      await vi.runAllTimersAsync();
+      await movement.whenReady;
+      expect(renderer.draw).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); }
+  });
+
+  it("shows the interrupted route immediately without searching new movement ranges", async () => {
+    enemy(250);
+    const collisions = vi.spyOn(token, "constrainMovementPath");
+    await movement.moveTo("0,6");
+    expect(collisions.mock.calls.length).toBeLessThan(10);
+    expect(renderer.showPreview.mock.lastCall?.[0]).toMatchObject({ enemiesDetected: true });
   });
 
   it("right-click discards the remainder, keeps completed movement, and allows a new plan", async () => {

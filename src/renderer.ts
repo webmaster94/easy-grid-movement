@@ -3,7 +3,7 @@ import { parseOffsetKey, type GridOffset } from "./grid";
 import type { MovementBand } from "./movement-band";
 import type { Threat } from "./threats";
 
-type RegionStyle = (typeof STYLES)[MovementBand];
+interface RegionStyle { borderColor: number; borderAlpha: number; borderWidth: number }
 type HighlightZone = "walk" | "dash";
 
 interface GridEdge {
@@ -89,13 +89,14 @@ export class MovementRenderer {
     this.#drawDifficultTerrain(ranges, difficultCells);
 
     this.#wheelListener = (event) => {
+      if (!event.shiftKey) return;
       const hoveredElement = document.elementFromPoint(event.clientX, event.clientY);
       if (!hoveredElement || hoveredElement.id !== "board") return;
       event.preventDefault();
       event.stopImmediatePropagation();
       const delta = event.deltaY || event.deltaX || 0;
       if (this.#hoveredKey && delta !== 0) {
-        handlers.onElevation(this.#hoveredKey, delta, event.shiftKey);
+        handlers.onElevation(this.#hoveredKey, delta, event.altKey);
       }
     };
     window.addEventListener("wheel", this.#wheelListener, { capture: true, passive: false });
@@ -173,8 +174,11 @@ export class MovementRenderer {
     for (const threat of preview.threats ?? []) {
       const g = this.#threatGraphics;
       if (!g) break;
-      g.lineStyle(3, threat.band === "short" ? 0xff3333 : 0xffcc00, 1);
-      g.moveTo(threat.from.x, threat.from.y).lineTo(threat.to.x, threat.to.y);
+      g.lineStyle(0);
+      this.#drawDottedEdge(g, threat.from, threat.to, {
+        ...STYLES.walk, borderWidth: 3, borderAlpha: 1,
+        borderColor: threat.band === "short" ? 0xff3333 : 0xffcc00,
+      }, true);
       g.lineStyle(3, 0xff3333, 1);
       g.beginFill(0xff3333, 0.2);
       g.drawRect(threat.bounds.x, threat.bounds.y, threat.bounds.width, threat.bounds.height);
@@ -306,7 +310,7 @@ export class MovementRenderer {
     }
   }
 
-  #drawDottedEdge(graphics: PIXI.Graphics, from: Point, to: Point, style: RegionStyle): void {
+  #drawDottedEdge(graphics: PIXI.Graphics, from: Point, to: Point, style: RegionStyle, round = false): void {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const length = Math.hypot(dx, dy);
@@ -316,7 +320,10 @@ export class MovementRenderer {
     graphics.beginFill(style.borderColor, style.borderAlpha);
     for (let distance = spacing / 2; distance < length; distance += spacing) {
       const progress = distance / length;
-      graphics.drawCircle(from.x + dx * progress, from.y + dy * progress, radius);
+      const x = from.x + dx * progress, y = from.y + dy * progress;
+      // Thousands of tiny grid dots do not need circle tessellation on every GPU upload.
+      if (round) graphics.drawCircle(x, y, radius);
+      else graphics.drawRect(x - radius, y - radius, radius * 2, radius * 2);
     }
     graphics.endFill();
   }

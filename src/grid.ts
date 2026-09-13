@@ -91,17 +91,19 @@ export function parseOffsetKey(key: string): GridOffset {
   return { i, j };
 }
 
-export function findReachability(
+export function* reachabilitySteps(
   start: GridOffset,
   maximumCost: number,
   adapter: ReachabilityAdapter,
-): ReachabilityResult {
+): Generator<void, ReachabilityResult> {
   const costs = new Map<string, number>();
   const geometricLengths = new Map<string, number>();
   const bends = new Map<string, number>();
   const paths = new Map<string, GridOffset[]>();
   if (maximumCost < 0 || !adapter.canOccupy(start)) return { costs, paths };
 
+  const occupancy = new Map<string, boolean>([[offsetKey(start), true]]);
+  const traversable = new Map<string, boolean>();
   const queue = new MinQueue();
   costs.set(offsetKey(start), 0);
   geometricLengths.set(offsetKey(start), 0);
@@ -110,6 +112,7 @@ export function findReachability(
   queue.push({ offset: start, cost: 0, geometricLength: 0, bends: 0, path: [start] });
 
   while (queue.size > 0) {
+    yield;
     const current = queue.pop();
     if (!current) break;
     const currentKey = offsetKey(current.offset);
@@ -124,13 +127,19 @@ export function findReachability(
     }
 
     for (const neighbor of adapter.getNeighbors(current.offset)) {
-      if (!adapter.canOccupy(neighbor) || !adapter.canTraverse(current.offset, neighbor)) continue;
+      const key = offsetKey(neighbor);
+      // Every accepted edge increases cost. A route through this cell cannot improve a cheaper one.
+      if ((costs.get(key) ?? Infinity) <= current.cost) continue;
+      if (!occupancy.has(key)) occupancy.set(key, adapter.canOccupy(neighbor));
+      if (!occupancy.get(key)) continue;
+      const edge = `${currentKey}>${key}`;
+      if (!traversable.has(edge)) traversable.set(edge, adapter.canTraverse(current.offset, neighbor));
+      if (!traversable.get(edge)) continue;
       const path = [...current.path, neighbor];
       const measuredCost = adapter.getPathCost(path);
       if (!Number.isFinite(measuredCost) || measuredCost <= current.cost) continue;
       const cost = Math.round(measuredCost * 100) / 100;
       if (cost > maximumCost + 0.01) continue;
-      const key = offsetKey(neighbor);
       const geometricLength = current.geometricLength + Math.hypot(
         neighbor.i - current.offset.i,
         neighbor.j - current.offset.j,
@@ -161,6 +170,14 @@ export function findReachability(
   }
 
   return { costs, paths };
+}
+
+// Synchronous entry point for callers that do not need to yield to the canvas.
+export function findReachability(start: GridOffset, maximumCost: number, adapter: ReachabilityAdapter): ReachabilityResult {
+  const search = reachabilitySteps(start, maximumCost, adapter);
+  let result = search.next();
+  while (!result.done) result = search.next();
+  return result.value;
 }
 
 export function findReachableCosts(

@@ -69,7 +69,7 @@ export class ThreatDetector {
   firstDiscovery(token: Token, path: readonly MovementWaypoint[]): ThreatDiscovery | null {
     if (!this.enabled || path.length < 2) return null;
     const enemies = this.#enemies(token);
-    const unseen = this.#withSight(token, path[0]!, canSee => enemies.filter(enemy => !canSee(enemy.token)));
+    const unseen = this.#withSight(token, path[0]!, canSee => enemies.filter(enemy => !canSee(enemy.token)), true);
     if (!unseen.length) return null;
     const destination = path.at(-1)!;
     for (let i = 1; i < path.length; i++) {
@@ -83,7 +83,7 @@ export class ThreatDetector {
           y: from.y + (to.y - from.y) * t, elevation: from.elevation + (to.elevation - from.elevation) * t,
           explicit: true, snapped: false, checkpoint: false };
         const detected = this.#withSight(token, point, canSee => unseen.some(enemy => canSee(enemy.token)
-          && (this.#threat(token, destination, enemy) || this.#threat(token, point, enemy))));
+          && (this.#threat(token, destination, enemy) || this.#threat(token, point, enemy))), true);
         if (detected) return {
           path: [...path.slice(0, i), point],
           remainder: [point, ...(step === steps ? path.slice(i + 1) : path.slice(i))],
@@ -104,7 +104,7 @@ export class ThreatDetector {
       bounds: { x: source.x, y: source.y, width: source.width * canvas.grid.size, height: source.height * canvas.grid.size } };
   }
 
-  #withSight<T>(token: Token, position: MovementWaypoint, test: (canSee: (enemy: Token) => boolean) => T): T {
+  #withSight<T>(token: Token, position: MovementWaypoint, test: (canSee: (enemy: Token) => boolean) => T, centerOnly = false): T {
     let source: VisionSource | null = null;
     try {
       if (canvas.visibility.tokenVision) {
@@ -127,8 +127,9 @@ export class ThreatDetector {
         }
         // In v14 active means attached to the canvas. This private source is deliberately unattached.
         if (!source || source.isBlinded || source.suppressed || source.data?.disabled) return false;
-        const points = enemy.document.getVisibilityTestPoints?.(enemy.document._source)
-          ?? [enemy.document.getMovementOrigin(enemy.document._source)];
+        // Interrupt only once the enemy's center is visible, rather than on a barely exposed edge.
+        const points = (!centerOnly && enemy.document.getVisibilityTestPoints?.(enemy.document._source))
+          || [enemy.document.getMovementOrigin(enemy.document._source)];
         const config = canvas.visibility._createVisibilityTestConfig(points, { tolerance: 0, object: enemy });
         return ["basicSight", "lightPerception"].some(id => {
           const mode = token.document.detectionModes[id];

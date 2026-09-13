@@ -4,7 +4,7 @@ import { DashController, movementTurnKey, type DashReservation } from "./dash";
 import { stepElevation } from "./elevation";
 import {
   cellsWithin,
-  findReachability,
+  reachabilitySteps,
   offsetKey,
   parseOffsetKey,
   type GridOffset,
@@ -50,6 +50,9 @@ export class EasyGridMovement {
     (tokenId) => this.refresh(tokenId),
     (tokenId) => this.#active && tokenId === this.#tokenId,
   );
+  #drawRequestId = 0;
+  #sightTimer: ReturnType<typeof setTimeout> | null = null;
+  whenReady: Promise<void> = Promise.resolve();
   #active = false;
   #initialized = false;
   #moving = false;
@@ -122,10 +125,27 @@ export class EasyGridMovement {
       this.#renderer.clear();
       this.refresh();
     });
-    Hooks.on("sightRefresh", () => this.refresh());
+    Hooks.on("sightRefresh", () => {
+      if (this.#moving || !this.#active || this.#sightTimer !== null) return;
+      this.#sightTimer = globalThis.setTimeout(() => {
+        this.#sightTimer = null;
+        const token = this.#tokenId ? canvas.tokens.get(this.#tokenId) : null;
+        if (token && this.#plan && !this.#moving) {
+          if (this.#updateVisibleCells(token, this.#plan)) {
+            this.#resetDestinationPreview();
+            this.#displayPlan(token, this.#plan);
+          }
+        }
+      }, 75);
+    });
+    for (const hook of ["createWall", "updateWall", "deleteWall", "createRegion", "updateRegion", "deleteRegion",
+      "createRegionBehavior", "updateRegionBehavior", "deleteRegionBehavior", "createToken", "deleteToken"] as const) {
+      Hooks.on(hook, () => this.refresh());
+    }
     Hooks.on("canvasTearDown", () => this.deactivate());
     Hooks.on("updateToken", (document, changes) => {
-      if ("movementAction" in changes && document.id) this.refresh(document.id);
+      if (["movementAction", "width", "height", "depth", "shape", "level"].some(key => key in changes)) this.refresh();
+      else if (document.id !== this.#tokenId && ["x", "y", "elevation", "width", "height", "depth", "level"].some(key => key in changes)) this.refresh();
     });
     Hooks.on("updateActor", () => this.refresh());
     for (const hook of ["createActiveEffect", "updateActiveEffect", "deleteActiveEffect"] as const) {
@@ -153,6 +173,9 @@ export class EasyGridMovement {
   }
 
   deactivate(): void {
+    this.#drawRequestId += 1;
+    if (this.#sightTimer !== null) globalThis.clearTimeout(this.#sightTimer);
+    this.#sightTimer = null;
     this.#interrupted = null;
     this.#active = false;
     this.#plan = null;
@@ -171,6 +194,7 @@ export class EasyGridMovement {
   }
 
   draw(token: Token): void {
+    const requestId = ++this.#drawRequestId;
     if (this.#interrupted && (!this.#samePosition(this.#interrupted.path[0]!, token.document._source)
       || this.#interrupted.turn !== movementTurnKey() || this.#interrupted.action !== token.document.movementAction)) {
       this.#interrupted = null;
@@ -203,10 +227,41 @@ export class EasyGridMovement {
       return;
     }
 
-    this.#plan = this.calculatePlan(token, remainingWalk, remainingDash, remainingOver);
-    const targets = new Set(this.#plan.over);
+    if (this.#interrupted) {
+      // The only pending destination is the saved route. Search fresh ranges after cancel/continue.
+      this.#plan = {
+        tokenId: token.id, start: canvas.grid.getOffset(token.document._source),
+        walk: new Set(), dash: new Set(), over: new Set(), difficult: new Set(),
+        reachability: { costs: new Map(), paths: new Map() },
+        remainingWalk, remainingDash, remainingOver,
+      };
+      this.#displayPlan(token, this.#plan);
+      this.whenReady = Promise.resolve();
+      return;
+    }
+
+    this.#renderer.clear();
+    const search = this.#calculatePlan(token, remainingWalk, remainingDash, remainingOver);
+    // Bound each search slice so animation, zoom, and cancellation remain responsive.
+    this.whenReady = new Promise<void>((resolve) => {
+      const advance = (): void => {
+        if (requestId !== this.#drawRequestId) { resolve(); return; }
+        const deadline = performance.now() + 8;
+        let result = search.next();
+        while (!result.done && performance.now() < deadline) result = search.next();
+        if (!result.done) { globalThis.setTimeout(advance, 0); return; }
+        this.#plan = result.value;
+        this.#displayPlan(token, this.#plan);
+        resolve();
+      };
+      advance();
+    });
+  }
+
+  #displayPlan(token: Token, plan: MovementPlan): void {
+    const targets = new Set(plan.over);
     if (this.#interrupted) targets.add(offsetKey(canvas.grid.getOffset(this.#interrupted.path.at(-1)!)));
-    this.#renderer.draw(this.#plan.walk, this.#plan.dash, targets, this.#plan.difficult, {
+    this.#renderer.draw(plan.walk, plan.dash, targets, new Set([...plan.difficult].filter(key => plan.dash.has(key))), {
       onHover: (key) => this.#hoverDestination(token, key),
       onLeave: () => this.#leaveDestination(token),
       onElevation: (key, wheelDelta, precise) =>
@@ -215,12 +270,8 @@ export class EasyGridMovement {
       onCancel: () => this.removeWaypoint(),
     });
     const pinned = this.#waypoints.at(-1);
-    if (pinned) this.#renderPreview(token, pinned, this.#plan);
-    if (this.#interrupted) this.#renderPreview(token, this.#resolvedPath(token, this.#interrupted.path, true), this.#plan);
-    this.#debug(
-      `${token.name}: speed ${speed}, moved ${moved}, walk destinations ${this.#plan.walk.size}, ` +
-        `dash destinations ${this.#plan.dash.size}, over-range destinations ${this.#plan.over.size}.`,
-    );
+    if (pinned) this.#renderPreview(token, pinned, plan);
+    if (this.#interrupted) this.#renderPreview(token, this.#resolvedPath(token, this.#interrupted.path, true), plan);
   }
 
   calculatePlan(
@@ -229,14 +280,35 @@ export class EasyGridMovement {
     dashDistance: number,
     overDistance = dashDistance,
   ): MovementPlan {
+    const search = this.#calculatePlan(token, walkDistance, dashDistance, overDistance);
+    let result = search.next();
+    while (!result.done) result = search.next();
+    return result.value;
+  }
+
+  *#calculatePlan(token: Token, walkDistance: number, dashDistance: number, overDistance: number): Generator<void, MovementPlan> {
     const start = canvas.grid.getOffset(this.#planningOrigin(token));
     const plannedCost = this.#waypoints.at(-1)?.cost ?? 0;
     const startKey = offsetKey(start);
     const difficult = new Set<string>();
+    const origin = this.#planningOrigin(token);
+    const blocked = new Set<string>();
+    for (const other of canvas.tokens.placeables) {
+      if (other.id === token.id || other.document.level !== origin.level
+        || !this.#elevationsOverlap(origin, other.document._source)) continue;
+      for (const space of other.document.getOccupiedGridSpaceOffsets(other.document._source)) blocked.add(offsetKey(space));
+    }
+    const waypoints = new Map<string, MovementWaypoint>();
+    const waypoint = (offset: GridOffset): MovementWaypoint => {
+      const key = offsetKey(offset);
+      let point = waypoints.get(key);
+      if (!point) { point = this.#waypoint(token, offset); waypoints.set(key, point); }
+      return point;
+    };
     const adapter: ReachabilityAdapter = {
       getNeighbors: (offset) => canvas.grid.getAdjacentOffsets(offset),
       getPathCost: (path) => {
-        const measurement = this.#measurePath(token, path);
+        const measurement = this.#measurePath(token, path.map(waypoint));
         const destination = path.at(-1);
         if (destination) {
           const key = offsetKey(destination);
@@ -245,10 +317,10 @@ export class EasyGridMovement {
         }
         return measurement.cost;
       },
-      canOccupy: (offset) => offsetKey(offset) === startKey || this.#canOccupy(token, offset),
-      canTraverse: (from, to) => this.#canTraverse(token, from, to),
+      canOccupy: (offset) => offsetKey(offset) === startKey || this.#canOccupy(token, waypoint(offset), blocked),
+      canTraverse: (from, to) => this.#canTraverse(token, waypoint(from), waypoint(to)),
     };
-    const reachability = findReachability(start, overDistance, adapter);
+    const reachability = yield* reachabilitySteps(start, overDistance, adapter);
     const walkRange = cellsWithin(reachability.costs, walkDistance - plannedCost);
     const dashRange = cellsWithin(reachability.costs, dashDistance - plannedCost);
     const overRange = cellsWithin(reachability.costs, overDistance);
@@ -262,12 +334,22 @@ export class EasyGridMovement {
       walk,
       dash,
       over,
-      difficult: new Set([...difficult].filter((key) => dash.has(key))),
+      difficult,
       reachability,
       remainingWalk: walkDistance,
       remainingDash: dashDistance,
       remainingOver: overDistance,
     };
+  }
+
+  #updateVisibleCells(token: Token, plan: MovementPlan): boolean {
+    const visible = new Set([...plan.reachability.costs.keys()].filter(key => this.#canSeeCell(token, key)));
+    if (visible.size === plan.over.size && [...visible].every(key => plan.over.has(key))) return false;
+    const plannedCost = this.#waypoints.at(-1)?.cost ?? 0;
+    plan.over = visible;
+    plan.walk = new Set([...plan.over].filter(key => plan.reachability.costs.get(key)! <= plan.remainingWalk - plannedCost + 0.01));
+    plan.dash = new Set([...plan.over].filter(key => plan.reachability.costs.get(key)! <= plan.remainingDash - plannedCost + 0.01));
+    return true;
   }
 
   async moveTo(destinationKey: string): Promise<void> {
@@ -366,7 +448,10 @@ export class EasyGridMovement {
       completed = true;
       this.#clearWaypoints();
       this.#interrupted = remainder ? { path: remainder, turn, action } : null;
-      if (remainder) ui.notifications.info(game.i18n.localize("EGM.Threats.Detected"));
+      // Document coordinates commit before the rendered token and its vision reach the endpoint.
+      // Keep refresh hooks suspended until the native animation has finished.
+      await token.movementAnimationPromise;
+      if (remainder && this.#active) ui.notifications.info(game.i18n.localize("EGM.Threats.Detected"));
       moveStarted = false;
     } catch (error) {
       if (moveStarted) this.#tracker.cancelPlannedMove(token.id);
@@ -382,7 +467,6 @@ export class EasyGridMovement {
       this.#moving = false;
       this.#resetDestinationPreview();
       this.refresh();
-      globalThis.setTimeout(() => this.refresh(), 500);
     }
   }
 
@@ -601,9 +685,8 @@ export class EasyGridMovement {
     this.#renderer.clearPreview();
   }
 
-  #measurePath(token: Token, path: readonly GridOffset[]): PathMeasurement {
+  #measurePath(token: Token, suffix: MovementWaypoint[]): PathMeasurement {
     try {
-      const suffix = path.map((offset) => this.#waypoint(token, offset));
       const pinned = this.#waypoints.at(-1);
       const waypoints = pinned ? [...pinned.movementPath, ...suffix.slice(1)] : suffix;
       const terrainPath = token.createTerrainMovementPath(waypoints, { preview: true });
@@ -618,11 +701,10 @@ export class EasyGridMovement {
     }
   }
 
-  #canTraverse(token: Token, from: GridOffset, to: GridOffset): boolean {
+  #canTraverse(token: Token, from: MovementWaypoint, destination: MovementWaypoint): boolean {
     try {
-      const destination = this.#waypoint(token, to);
       const [path, constrained] = token.constrainMovementPath(
-        [this.#waypoint(token, from), destination],
+        [from, destination],
         { preview: true, ignoreCost: true },
       );
       const final = path.at(-1);
@@ -633,19 +715,9 @@ export class EasyGridMovement {
     }
   }
 
-  #canOccupy(token: Token, offset: GridOffset): boolean {
-    const waypoint = this.#waypoint(token, offset);
-    if (!this.#isInsideScene(token, waypoint)) return false;
-    const occupied = token.document.getOccupiedGridSpaceOffsets(waypoint);
-    for (const other of canvas.tokens.placeables) {
-      if (other.id === token.id || other.document.level !== waypoint.level) continue;
-      if (!this.#elevationsOverlap(waypoint, other.document._source)) continue;
-      const blocked = new Set(
-        other.document.getOccupiedGridSpaceOffsets(other.document._source).map((space) => offsetKey(space)),
-      );
-      if (occupied.some((space) => blocked.has(offsetKey(space)))) return false;
-    }
-    return true;
+  #canOccupy(token: Token, waypoint: MovementWaypoint, blocked: ReadonlySet<string>): boolean {
+    return this.#isInsideScene(token, waypoint)
+      && !token.document.getOccupiedGridSpaceOffsets(waypoint).some(space => blocked.has(offsetKey(space)));
   }
 
   #canSeeCell(token: Token, key: string): boolean {

@@ -72,6 +72,7 @@ interface TokenDocument {
 }
 
 interface Token {
+  movementAnimationPromise?: Promise<unknown> | null;
   hasSight?: boolean;
   _getVisionSourceData?(): Record<string, unknown>;
   _getVisionBlindedStates?(): Record<string, boolean>;
@@ -149,16 +150,18 @@ interface GridOffset {
 }
 
 interface HooksApi {
-  on(hook: "updateActor" | "createActiveEffect" | "updateActiveEffect" | "deleteActiveEffect", callback: () => unknown): number;
+  on(this: void, hook: "createWall" | "updateWall" | "deleteWall" | "createRegion" | "updateRegion" | "deleteRegion"
+    | "createRegionBehavior" | "updateRegionBehavior" | "deleteRegionBehavior" | "createToken" | "deleteToken", callback: () => unknown): number;
+  on(this: void, hook: "updateActor" | "createActiveEffect" | "updateActiveEffect" | "deleteActiveEffect", callback: () => unknown): number;
   once(hook: "init", callback: () => unknown): number;
-  on(hook: "updateCombat", callback: (combat: unknown, changes: Record<string, unknown>) => unknown): number;
-  on(hook: "deleteCombat", callback: () => unknown): number;
-  on(hook: "preUpdateToken", callback: (document: TokenDocument, changes: TokenUpdate) => unknown): number;
-  on(hook: "updateToken", callback: (document: TokenDocument, changes: TokenUpdate) => unknown): number;
-  on(hook: "controlToken", callback: (token: Token, controlled: boolean) => unknown): number;
-  on(hook: "canvasReady", callback: () => unknown): number;
-  on(hook: "sightRefresh", callback: () => unknown): number;
-  on(hook: "canvasTearDown", callback: () => unknown): number;
+  on(this: void, hook: "updateCombat", callback: (combat: unknown, changes: Record<string, unknown>) => unknown): number;
+  on(this: void, hook: "deleteCombat", callback: () => unknown): number;
+  on(this: void, hook: "preUpdateToken", callback: (document: TokenDocument, changes: TokenUpdate) => unknown): number;
+  on(this: void, hook: "updateToken", callback: (document: TokenDocument, changes: TokenUpdate) => unknown): number;
+  on(this: void, hook: "controlToken", callback: (token: Token, controlled: boolean) => unknown): number;
+  on(this: void, hook: "canvasReady", callback: () => unknown): number;
+  on(this: void, hook: "sightRefresh", callback: () => unknown): number;
+  on(this: void, hook: "canvasTearDown", callback: () => unknown): number;
 }
 
 declare const Hooks: HooksApi;

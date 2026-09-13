@@ -14,10 +14,12 @@ The interaction model follows the [XCOM 2 manual](https://www.feralinteractive.c
 - Paths are rendered from the center of the token's footprint and show green, yellow, and red segments as cumulative cost crosses each movement threshold. Over-range cells do not receive a red grid highlight.
 - Movement ranges use Foundry v14's native grid-highlight layer with fully opaque dotted grid edges instead of map-obscuring area fills. Only the green-to-yellow zone transition uses a solid edge; walls, fog, terrain blockers, and other unreachable boundaries remain dotted.
 - Grid highlights and hover targets are limited to cells Foundry reports as currently visible through its active token-vision pipeline.
-- Hovered destinations can be raised or lowered with the mouse wheel; the chosen elevation is included in Foundry's native path constraint, terrain, 3D measurement, and movement-history pipelines.
-- Canvas wheel zoom is suppressed while movement mode is active and restored immediately when the overlay closes.
+- Hovered destinations can be raised or lowered with Shift + mouse wheel; the chosen elevation is included in Foundry's native path constraint, terrain, 3D measurement, and movement-history pipelines.
+- Ordinary mouse-wheel scrolling zooms the canvas while movement mode is active.
 - Foundry v14 wall, token-footprint, occupied-space, terrain-cost, and diagonal-distance rules are used when planning.
 - Native difficult-terrain regions are identified through Foundry's terrain movement path; affected cells use angular hatching and affected route segments use an angular line.
+
+Range searches reuse collision and footprint checks and run in short slices to keep the canvas responsive. Sight refreshes update visibility without repeating path searches.
 
 ## Requirements
 
@@ -30,7 +32,7 @@ The interaction model follows the [XCOM 2 manual](https://www.feralinteractive.c
 1. Control a token.
 2. Press `M` to toggle the overlay.
 3. Hover any visible destination to preview its route and cost, including destinations beyond the yellow grid area.
-4. While hovering, scroll the mouse wheel up or down to raise or lower the destination by one grid-distance step. Hold `Shift` while scrolling to use Foundry's precise elevation increment.
+4. While hovering, hold `Shift` and scroll the mouse wheel to raise or lower the destination by one grid-distance step. Hold `Shift` + `Alt` while scrolling for Foundry's precise elevation increment. Scroll without `Shift` to zoom.
 5. Click the selected square to move there, or hold `Ctrl` while clicking to pin a waypoint. Hover another square to extend the route from that waypoint. The cost and colors include the full planned path.
 6. Add more waypoints with `Ctrl`-click, or click without `Ctrl` to move along the planned route. Green, yellow, and red routes are all allowed; the color communicates cost rather than blocking the move.
 7. Right-click to undo the last waypoint. Right-click again when no waypoints remain to close the overlay, or press `M` to cancel the entire plan at once.
@@ -57,9 +59,9 @@ The route is checked again after confirmation. If it becomes blocked or movement
 
 Enable **Detect Threats when moving** under **Configure Settings → Module Settings → Easy Grid Movement**. This personal setting defaults to off and applies immediately when saved.
 
-While hovering a destination, enemies you can see from your token's current position are outlined and shaded red if an equipped ranged weapon can reach that destination. A red line means normal range; yellow means long range. The closest applicable range band across their weapons is used. Thrown weapon attacks count; spells and melee-only attacks do not. Walls block the attack lines, and distances include elevation and the scene's grid measurement rules.
+While hovering a destination, enemies you can see from your token's current position are outlined and shaded red if an equipped ranged weapon can reach that destination. A dotted red line means normal range; dotted yellow means long range. The closest applicable range band across their weapons is used. Thrown weapon attacks count; spells and melee-only attacks do not. Walls block the attack lines, and distances include elevation and the scene's grid measurement rules.
 
-When you commit a route, movement pauses at the first sampled position where a previously unseen ranged threat comes into sight. **Enemies Detected** appears on the selected destination with the newly available threat lines. Click again to continue along the saved route. Right-click cancels the remainder and leaves the overlay open for a new plan. Movement already completed stays spent; Dash is requested only when the segment being moved requires it. The remaining route is checked again before continuing.
+When you commit a route, movement pauses at the first sampled position where the center of a previously unseen ranged threat comes into sight. The token finishes animating to that position before the warning appears. **Enemies Detected** appears on the selected destination with the newly available threat lines. Click again to continue along the saved route. While paused, the overlay shows the saved route and threat lines. Right-click cancels the remainder and rebuilds movement ranges for a new plan. Movement already completed stays spent; Dash is requested only when the segment being moved requires it. The remaining route is checked again before continuing.
 
 Enemies are tokens with the opposite friendly/hostile disposition. Neutral, secret, GM-hidden, dead, and incapacitated tokens are excluded. Visibility uses the moving token's sight and lighting, even for the GM, rather than another party member's vision. The preview does not reveal enemies behind walls or alter explored fog. Detection checks at most a quarter-square between positions along the route, so the stop can fall between grid squares.
 
