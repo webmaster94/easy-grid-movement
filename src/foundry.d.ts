@@ -197,6 +197,7 @@ declare const canvas: {
   masks?: { vision: { renderDirty: boolean } };
   grid: {
     isSquare: boolean;
+    diagonals?: number;
     size: number;
     thickness: number;
     distance: number;

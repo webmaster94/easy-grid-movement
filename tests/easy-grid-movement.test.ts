@@ -163,6 +163,24 @@ describe("movement interaction", () => {
     expect(footprint).toHaveBeenCalledTimes(1);
   });
 
+  it("caches native step costs without changing range costs or routes", () => {
+    const full = movement.calculatePlan(token, 30, 60, 90);
+    const terrain = vi.spyOn(token, "createTerrainMovementPath");
+    canvas.grid.diagonals = 0;
+    const cached = movement.calculatePlan(token, 30, 60, 90);
+    expect(cached.reachability).toEqual(full.reachability);
+    expect(terrain.mock.calls.every(([path]) => path.length === 2)).toBe(true);
+    const edges = terrain.mock.calls.map(([path]) => path.map(p => `${p.x},${p.y}`).join(">"));
+    expect(new Set(edges).size).toBe(edges.length);
+  });
+
+  it("keeps full-route measurement for alternating diagonals", () => {
+    canvas.grid.diagonals = 4;
+    const terrain = vi.spyOn(token, "createTerrainMovementPath");
+    movement.calculatePlan(token, 30, 60, 90);
+    expect(terrain.mock.calls.some(([path]) => path.length > 2)).toBe(true);
+  });
+
   it("shows the paused route during the camera tour and cancels its remainder on right-click", async () => {
     enemy(250); cinematicEnabled = true;
     let finish!: () => void;
@@ -275,6 +293,58 @@ describe("movement interaction", () => {
     await movement.moveTo("0,4");
     expect(token.document._source.x).toBe(400);
     expect(cinematic.highlight).toHaveBeenLastCalledWith(["enemy", "second"]);
+  });
+
+  it("finishes immediately when grouped detection reaches the final square", async () => {
+    groupedEnemies(350);
+    await movement.moveTo("0,4");
+    renderer.showPreview.mockClear();
+    handlers().onHover("0,5"); await vi.advanceTimersByTimeAsync(0);
+    expect(renderer.showPreview.mock.lastCall?.[0]).toMatchObject({ enemiesDetected: false });
+    await movement.moveTo("0,5");
+    expect(token.document._source.x).toBe(500);
+  });
+
+  it("remembers an initially visible enemy across an intervening discovery stop", async () => {
+    groupedEnemies(250);
+    token.checkCollision = (target, options) => {
+      const x = options?.origin?.x ?? 0;
+      return target.x === 950 ? x > 100 && x < 500 : x < 250;
+    };
+    await movement.moveTo("0,6");
+    expect(token.document._source.x).toBe(250);
+    await movement.moveTo("0,6");
+    expect(token.document._source.x).toBe(600);
+    expect(ui.notifications.info).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes a partly visible enemy in the group when another enemy triggers the stop", () => {
+    groupedEnemies(250);
+    canvas.visibility.tokenVision = true;
+    token._getVisionSourceData = () => ({});
+    token.document.getVisionOrigin = p => ({ x: p!.x!, y: p!.y! });
+    token.document.detectionModes = { basicSight: {} };
+    canvas.tokens.placeables[2]!.document.getVisibilityTestPoints = () => [{ x: 800, y: 550 }];
+    let originX = 0, targetX = 0;
+    CONFIG.Canvas.visionSourceClass = class {
+      active = false;
+      initialize(data: Record<string, unknown>) { originX = Number(data.x); }
+      destroy() {}
+    };
+    canvas.visibility._createVisibilityTestConfig = points => { targetX = (Array.isArray(points) ? points[0]! : points).x; return {}; };
+    CONFIG.Canvas.detectionModes = { basicSight: { testVisibility: () => originX >= (targetX === 850 ? 500 : 250) } };
+    const start = token.document._source;
+    const discovery = new ThreatDetector().firstDiscovery(token, [start, { ...start, x: 600 }]);
+    expect(discovery?.enemyIds).toContain("second");
+  });
+
+  it("keeps spent normal movement out of green after canceling a dashed interruption", async () => {
+    enemy(700); await movement.moveTo("0,9"); movement.removeWaypoint();
+    const walk = renderer.draw.mock.lastCall?.[0] as Set<string>;
+    expect(token.document._source.x).toBe(700);
+    expect(walk.has("0,8")).toBe(false);
+    await movement.moveTo("0,8");
+    expect(confirm).toHaveBeenCalledOnce();
   });
 
   it("does not slide the two-space window forward when another enemy is detected", () => {
@@ -522,8 +592,10 @@ describe("movement interaction", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledTimes(2);
     const walk = renderer.draw.mock.lastCall?.[0] as Set<string>;
-    expect(walk.has("4,8")).toBe(true);
-    expect(walk.has("5,8")).toBe(false);
+    const dash = renderer.draw.mock.lastCall?.[1] as Set<string>;
+    expect(walk.has("4,8")).toBe(false);
+    expect(dash.has("4,8")).toBe(true);
+    expect(dash.has("5,8")).toBe(false);
   });
 
   it("reads changes to the confirmation preference on the next move", async () => {

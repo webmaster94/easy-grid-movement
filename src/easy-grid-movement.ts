@@ -25,6 +25,7 @@ export interface MovementPlan {
   difficult: Set<string>;
   reachability: ReachabilityResult;
   remainingWalk: number;
+  remainingPaid: number;
   remainingDash: number;
   remainingOver: number;
 }
@@ -234,9 +235,10 @@ export class EasyGridMovement {
 
     const moved = this.#tracker.getMovedDistance(token);
     const bonus = this.#dash.bonus(token);
-    const remainingWalk = Math.max(0, speed + bonus - moved);
-    const remainingDash = Math.max(0, speed * 2 + bonus - moved);
-    const remainingOver = Math.max(0, speed * 3 + bonus - moved);
+    const remainingWalk = Math.max(0, speed - moved);
+    const remainingPaid = Math.max(0, speed + bonus - moved);
+    const remainingDash = Math.max(0, Math.max(speed * 2, speed + bonus) - moved);
+    const remainingOver = Math.max(0, Math.max(speed * 3, speed + bonus) - moved);
     if (remainingOver <= 0 && !this.#interrupted) {
       this.#plan = null;
       this.#renderer.clear();
@@ -249,7 +251,7 @@ export class EasyGridMovement {
         tokenId: token.id, start: canvas.grid.getOffset(token.document._source),
         walk: new Set(), dash: new Set(), over: new Set(), difficult: new Set(),
         reachability: { costs: new Map(), paths: new Map() },
-        remainingWalk, remainingDash, remainingOver,
+        remainingWalk, remainingPaid, remainingDash, remainingOver,
       };
       this.#displayPlan(token, this.#plan);
       this.whenReady = Promise.resolve();
@@ -257,7 +259,7 @@ export class EasyGridMovement {
     }
 
     this.#renderer.clear(true);
-    const search = this.#calculatePlan(token, remainingWalk, remainingDash, remainingOver);
+    const search = this.#calculatePlan(token, remainingWalk, remainingDash, remainingOver, remainingPaid);
     // Bound each search slice so animation, zoom, and cancellation remain responsive.
     this.whenReady = new Promise<void>((resolve) => {
       const advance = (): void => {
@@ -303,7 +305,7 @@ export class EasyGridMovement {
     return result.value;
   }
 
-  *#calculatePlan(token: Token, walkDistance: number, dashDistance: number, overDistance: number): Generator<void, MovementPlan> {
+  *#calculatePlan(token: Token, walkDistance: number, dashDistance: number, overDistance: number, paidDistance = walkDistance): Generator<void, MovementPlan> {
     const start = canvas.grid.getOffset(this.#planningOrigin(token));
     const plannedCost = this.#waypoints.at(-1)?.cost ?? 0;
     const startKey = offsetKey(start);
@@ -316,6 +318,9 @@ export class EasyGridMovement {
       for (const space of other.document.getOccupiedGridSpaceOffsets(other.document._source)) blocked.add(offsetKey(space));
     }
     const waypoints = new Map<string, MovementWaypoint>();
+    // These grid rules have additive segment costs. Alternating diagonals need full-route context.
+    const incremental = [0, 1, 2, 3, 6].includes(canvas.grid.diagonals ?? -1);
+    const edgeMeasurements = new Map<string, PathMeasurement>();
     const waypoint = (offset: GridOffset): MovementWaypoint => {
       const key = offsetKey(offset);
       let point = waypoints.get(key);
@@ -325,7 +330,28 @@ export class EasyGridMovement {
     const adapter: ReachabilityAdapter = {
       getNeighbors: (offset) => canvas.grid.getAdjacentOffsets(offset),
       getPathCost: (path) => {
-        const measurement = this.#measurePath(token, path.map(waypoint));
+        let measurement: PathMeasurement;
+        if (incremental) {
+          measurement = { cost: 0, difficult: false };
+          for (let i = 1; i < path.length; i++) {
+            const from = path[i - 1]!, to = path[i]!;
+            const key = `${offsetKey(from)}>${offsetKey(to)}`;
+            let edge = edgeMeasurements.get(key);
+            if (!edge) {
+              try {
+                const terrain = token.createTerrainMovementPath([waypoint(from), waypoint(to)], { preview: true });
+                const measured = token.measureMovementPath(terrain, { preview: true });
+                edge = { cost: measured.cost ?? measured.distance, difficult: Boolean(terrain.at(-1)?.terrain?.difficultTerrain) };
+              } catch (error) {
+                this.#debug("Path measurement failed.", error);
+                edge = { cost: Infinity, difficult: false };
+              }
+              edgeMeasurements.set(key, edge);
+            }
+            measurement.cost += edge.cost;
+            measurement.difficult = edge.difficult;
+          }
+        } else measurement = this.#measurePath(token, path.map(waypoint));
         const destination = path.at(-1);
         if (destination) {
           const key = offsetKey(destination);
@@ -354,6 +380,7 @@ export class EasyGridMovement {
       difficult,
       reachability,
       remainingWalk: walkDistance,
+      remainingPaid: paidDistance,
       remainingDash: dashDistance,
       remainingOver: overDistance,
     };
@@ -391,10 +418,12 @@ export class EasyGridMovement {
     const action = token.document.movementAction;
     const speed = this.#getMovementSpeed(token);
     const turn = movementTurnKey();
+    const known = new Set(interrupted?.known ?? []);
     const isCurrent = (): boolean => this.#active && plan === this.#plan && turn === movementTurnKey()
       && action === token.document.movementAction && speed === this.#getMovementSpeed(token)
       && this.#samePosition(origin, token.document._source);
     try {
+      for (const id of this.#threats.visibleEnemies(token)) known.add(id);
       const resolve = async (): Promise<ResolvedMovementPath | null> => {
         if (!interrupted) return this.#resolveMovementPath(token, path!, elevation, false);
         if (!this.#checkSavedPath(token, interrupted.path)) return null;
@@ -402,7 +431,7 @@ export class EasyGridMovement {
         return Number.isFinite(resolved.cost) ? resolved : null;
       };
       const prepare = (full: ResolvedMovementPath): ResolvedMovementPath => {
-        const discovery = this.#threats.firstDiscovery(token, full.movementPath, interrupted?.known);
+        const discovery = this.#threats.firstDiscovery(token, full.movementPath, known);
         remainder = discovery?.remainder ?? null;
         detected = discovery?.enemyIds ?? [];
         return discovery ? this.#resolvedPath(token, discovery.path, false) : full;
@@ -415,7 +444,7 @@ export class EasyGridMovement {
       }
       let resolved = prepare(full);
       if (resolved.cost <= 0.01 && this.#samePosition(token.document._source, resolved.destination)) return;
-      if (resolved.cost > plan.remainingWalk + 0.01) {
+      if (resolved.cost > plan.remainingPaid + 0.01) {
         dash = await this.#dash.reserve(token, speed, resolved.cost > plan.remainingDash + 0.01, isCurrent);
         if (!dash || !isCurrent()) return;
         // The dialog can remain open while the scene changes. Recheck the complete route.
@@ -466,8 +495,10 @@ export class EasyGridMovement {
       this.#tracker.finishPlannedMove(token.id);
       completed = true;
       this.#clearWaypoints();
-      const known = new Set([...(interrupted?.known ?? []), ...detected]);
-      this.#interrupted = remainder ? { path: remainder, turn, action, known } : null;
+      for (const id of detected) known.add(id);
+      // prepare assigns this inside a callback; TypeScript does not track that assignment.
+      const remainingPath = remainder as MovementWaypoint[] | null;
+      this.#interrupted = remainingPath && remainingPath.length > 1 ? { path: remainingPath, turn, action, known } : null;
       // Document coordinates commit before the rendered token and its vision reach the endpoint.
       // Keep refresh hooks suspended until the native animation has finished.
       await token.movementAnimationPromise;
@@ -475,7 +506,7 @@ export class EasyGridMovement {
         this.#cinematic.highlight([...known]);
         if (game.settings.get(MODULE_ID, CINEMATIC_THREATS_SETTING) !== false) {
           try {
-            this.draw(token);
+            if (this.#interrupted) this.draw(token);
             await this.#cinematic.play(detected, () => this.#active && this.#tokenId === token.id
               && movementTurnKey() === turn && this.#threats.enabled);
           } catch (error) {
@@ -483,6 +514,7 @@ export class EasyGridMovement {
             ui.notifications.info(game.i18n.localize("EGM.Threats.Detected"));
           }
         } else ui.notifications.info(game.i18n.localize("EGM.Threats.Detected"));
+        if (!this.#interrupted) this.#cinematic.clear();
       } else this.#cinematic.clear();
       moveStarted = false;
     } catch (error) {

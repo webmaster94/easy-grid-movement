@@ -19,7 +19,7 @@ The interaction model follows the [XCOM 2 manual](https://www.feralinteractive.c
 - Foundry v14 wall, token-footprint, occupied-space, terrain-cost, and diagonal-distance rules are used when planning.
 - Native difficult-terrain regions are identified through Foundry's terrain movement path; affected cells use angular hatching and affected route segments use an angular line.
 
-Range searches reuse collision and footprint checks and run in short slices to keep the canvas responsive. Sight refreshes update visibility without repeating path searches.
+Range searches reuse collision, footprint, and native per-step cost checks and run in short slices to keep the canvas responsive. Alternating diagonal rules retain full-route measurement. Sight refreshes update visibility without repeating path searches.
 
 ## Requirements
 
@@ -53,6 +53,8 @@ With **BG3 Combat Bar** enabled, Easy Grid Movement uses the bar's action-spendi
 
 A successful Dash adds the selected speed to the token's movement allowance. During combat, that allowance is stored on the token for the current turn and survives closing the overlay or reloading. Later movement within the paid allowance does not spend another action. A Dash already applied through the combat bar's temporary speed effect is also recognized. Outside combat, the allowance lasts for the current overlay session.
 
+Paid Dash movement stays yellow; it does not refill green movement or add another unpaid Dash range. For example, with a speed of 30 feet, one Dash, and 35 feet already moved, the overlay shows no remaining green movement and 25 feet of yellow movement. Canceling a pending route preserves those totals.
+
 The route is checked again after confirmation. If it becomes blocked or movement fails, the unused Dash allowance and reserved action are returned. Routes beyond one Dash retain the existing over-range behavior; the confirmation warns that another source of movement is required, and only one Dash is spent.
 
 ## Threat detection
@@ -61,11 +63,13 @@ Enable **Detect Threats when moving** under **Configure Settings → Module Sett
 
 While hovering a destination, enemies you can see from your token's current position are outlined and shaded red if an equipped ranged weapon can reach that destination. A dotted red line means normal range; dotted yellow means long range. The closest applicable range band across their weapons is used. Thrown weapon attacks count; spells and melee-only attacks do not. Walls block the attack lines, and distances include elevation and the scene's grid measurement rules.
 
-When you commit a route, movement pauses where a previously unseen ranged threat comes into sight. Detection checks the next two spaces along the planned route: if another threat appears in that window, the token advances to its end, or the destination if closer, and announces those enemies together. Otherwise it stops at the first discovery. The window stays fixed, so later discoveries cannot keep pushing the stop forward. Enemies already announced during this route will not cause another interruption.
+When you commit a route, movement pauses where a previously unseen ranged threat comes into sight. Detection checks the next two spaces along the planned route: if another threat appears in that window, the token advances to its end, or the destination if closer, and announces those enemies together. Otherwise it stops at the first discovery. The window stays fixed, so later discoveries cannot keep pushing the stop forward. Enemies visible at the start or already announced during this route will not cause another interruption if they leave sight and return. Once a threat triggers the stop, the group also includes other partly visible threats using the same visibility checks as the overlay.
 
 The token finishes animating before the warning appears. **Enemies Detected** appears in a large decorated frame, then the camera tours the newly discovered enemies and returns to its original position and zoom. Nearby enemies share a camera shot, with the zoom fitted to include the whole group. **Cinematic grouping distance** sets the maximum group width or height in grid spaces; it defaults to six and can be changed from two to twenty. The setting is personal and applies to the next cinematic without reloading.
 
 Each camera shot temporarily reveals the map within one square of its enemies' footprints, including enemies that passed out of sight during the extra movement. This local reveal clears after the shot and is excluded from explored fog. Red highlights remain while the route is pending. **Cinematic threat reveals** can be disabled independently of threat detection and takes effect immediately.
+
+If detection reaches the final destination, the cinematic still plays but the route finishes automatically. No extra click or continuation prompt is required.
 
 Click again after the tour to continue along the saved route. While paused, the overlay shows the route and currently visible threat lines. A short right-click cancels the remainder and rebuilds movement ranges for a new plan. Hold right-click and drag to pan; a long hold alone does not cancel. Ordinary wheel scrolling zooms, and Shift-wheel changes destination elevation. Manual panning or zooming ends an active camera tour and leaves the saved route intact. Pressing `M` closes movement mode and cancels the tour. Movement already completed stays spent; Dash is requested only when the segment being moved requires it. The remaining route is checked again before continuing.
 

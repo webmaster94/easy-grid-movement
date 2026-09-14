@@ -45,6 +45,12 @@ export interface ThreatDiscovery { path: MovementWaypoint[]; remainder: Movement
 export class ThreatDetector {
   get enabled(): boolean { return game.settings.get(MODULE_ID, DETECT_THREATS_SETTING) === true; }
 
+  visibleEnemies(token: Token, position: MovementWaypoint = token.document._source): Set<string> {
+    if (!this.enabled) return new Set();
+    return this.#withSight(token, position, canSee => new Set(this.#enemies(token)
+      .filter(enemy => canSee(enemy.token)).map(enemy => enemy.token.id)));
+  }
+
   #enemies(token: Token): Array<{ token: Token; ranges: WeaponRange[] }> {
     const disposition = token.document.disposition ?? 0;
     return canvas.tokens.placeables.flatMap(enemy => {
@@ -70,7 +76,7 @@ export class ThreatDetector {
     if (!this.enabled || path.length < 2) return null;
     const enemies = this.#enemies(token);
     const unseen = this.#withSight(token, path[0]!, canSee => enemies.filter(enemy =>
-      !known.has(enemy.token.id) && !canSee(enemy.token)), true);
+      !known.has(enemy.token.id) && !canSee(enemy.token)));
     if (!unseen.length) return null;
     const destination = path.at(-1)!;
     type Sample = { point: MovementWaypoint; leg: number; atEnd: boolean; travel: number };
@@ -94,11 +100,15 @@ export class ThreatDetector {
           y: from.y + (to.y - from.y) * t, elevation: from.elevation + (to.elevation - from.elevation) * t,
           explicit: true, snapped: false, checkpoint: false };
         this.#withSight(token, point, canSee => {
+          // Wait for a center-visible threat to trigger a stop, then include every visibly exposed enemy.
+          const triggers = first || unseen.some(enemy => canSee(enemy.token, true)
+            && (this.#threat(token, destination, enemy) || this.#threat(token, point, enemy)));
+          if (!triggers) return;
           for (const enemy of unseen) {
             if (!discovered.has(enemy.token.id) && canSee(enemy.token)
               && (this.#threat(token, destination, enemy) || this.#threat(token, point, enemy))) discovered.add(enemy.token.id);
           }
-        }, true);
+        });
         last = { point, leg: i, atEnd, travel: distance };
         if (!first && discovered.size) { first = last; firstCount = discovered.size; }
         if (distance >= limit - 1e-8) break scan;
@@ -126,7 +136,7 @@ export class ThreatDetector {
       bounds: { x: source.x, y: source.y, width: source.width * canvas.grid.size, height: source.height * canvas.grid.size } };
   }
 
-  #withSight<T>(token: Token, position: MovementWaypoint, test: (canSee: (enemy: Token) => boolean) => T, centerOnly = false): T {
+  #withSight<T>(token: Token, position: MovementWaypoint, test: (canSee: (enemy: Token, centerOnly?: boolean) => boolean) => T): T {
     let source: VisionSource | null = null;
     try {
       if (canvas.visibility.tokenVision) {
@@ -139,7 +149,7 @@ export class ThreatDetector {
         source.initialize?.({ ...token._getVisionSourceData(), ...token.document.getVisionOrigin(position),
           level: position.level, preview: true });
       }
-      return test(enemy => {
+      return test((enemy, centerOnly = false) => {
         if (enemy.document.hidden) return false;
         if (!canvas.visibility.tokenVision) {
           if (token.actor?.statuses?.has("blinded") || enemy.actor?.statuses?.has("invisible")) return false;
