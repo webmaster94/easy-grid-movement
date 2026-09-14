@@ -25,3 +25,6 @@ export const STYLES = {
     width: 3,
   },
 } as const;
+
+export const CINEMATIC_THREATS_SETTING = "cinematicThreats";
+export const CINEMATIC_GROUP_DISTANCE_SETTING = "cinematicGroupDistance";

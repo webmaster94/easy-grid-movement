@@ -1,4 +1,5 @@
 import { MODULE_ID, STYLES } from "./constants";
+import { CanvasNavigation } from "./canvas-navigation";
 import { parseOffsetKey, type GridOffset } from "./grid";
 import type { MovementBand } from "./movement-band";
 import type { Threat } from "./threats";
@@ -20,6 +21,7 @@ export interface MovementRendererHandlers {
   onElevation(key: string, wheelDelta: number, precise: boolean): void;
   onSelect(key: string, waypoint: boolean): void;
   onCancel(): void;
+  onNavigate?(): void;
 }
 
 export interface MovementPreview {
@@ -45,13 +47,11 @@ export class MovementRenderer {
   #hoveredKey: string | null = null;
   #previousGridInteraction: boolean | null = null;
   #wheelListener: ((event: WheelEvent) => void) | null = null;
-  #cancelListener: ((event: MouseEvent) => void) | null = null;
-  #rightDownListener: ((event: PointerEvent) => void) | null = null;
+  readonly #navigation = new CanvasNavigation();
 
-  clear(): void {
+  clear(preserveNavigation = false): void {
     if (this.#wheelListener) window.removeEventListener("wheel", this.#wheelListener, true);
-    if (this.#cancelListener) window.removeEventListener("contextmenu", this.#cancelListener, true);
-    if (this.#rightDownListener) window.removeEventListener("pointerdown", this.#rightDownListener, true);
+    if (!preserveNavigation) this.#navigation.clear();
     if (canvas.interface?.grid) canvas.interface.grid.destroyHighlightLayer(HIGHLIGHT_LAYER);
     this.#container?.destroy({ children: true });
     if (this.#previousGridInteraction !== null && canvas.interface?.grid) {
@@ -64,8 +64,6 @@ export class MovementRenderer {
     this.#hoveredKey = null;
     this.#previousGridInteraction = null;
     this.#wheelListener = null;
-    this.#cancelListener = null;
-    this.#rightDownListener = null;
   }
 
   draw(
@@ -76,7 +74,7 @@ export class MovementRenderer {
     handlers: MovementRendererHandlers,
   ): void {
     if (!canvas.interface?.grid || !canvas.grid) return;
-    this.clear();
+    this.clear(true);
     this.#previousGridInteraction = canvas.interface.grid.interactiveChildren;
     canvas.interface.grid.interactiveChildren = true;
     this.#container = new PIXI.Container();
@@ -89,9 +87,9 @@ export class MovementRenderer {
     this.#drawDifficultTerrain(ranges, difficultCells);
 
     this.#wheelListener = (event) => {
-      if (!event.shiftKey) return;
       const hoveredElement = document.elementFromPoint(event.clientX, event.clientY);
       if (!hoveredElement || hoveredElement.id !== "board") return;
+      if (!event.shiftKey) { handlers.onNavigate?.(); return; }
       event.preventDefault();
       event.stopImmediatePropagation();
       const delta = event.deltaY || event.deltaX || 0;
@@ -100,19 +98,7 @@ export class MovementRenderer {
       }
     };
     window.addEventListener("wheel", this.#wheelListener, { capture: true, passive: false });
-    this.#cancelListener = (event) => {
-      if (document.elementFromPoint(event.clientX, event.clientY)?.id !== "board") return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      handlers.onCancel();
-    };
-    window.addEventListener("contextmenu", this.#cancelListener, true);
-    this.#rightDownListener = (event) => {
-      if (event.button !== 2 || document.elementFromPoint(event.clientX, event.clientY)?.id !== "board") return;
-      // Keep Foundry's right-drag and token HUD handlers out of the undo gesture.
-      event.stopImmediatePropagation();
-    };
-    window.addEventListener("pointerdown", this.#rightDownListener, true);
+    this.#navigation.activate(() => handlers.onCancel(), () => handlers.onNavigate?.());
 
     this.#previewGraphics = new PIXI.Graphics();
     this.#previewGraphics.eventMode = "none";

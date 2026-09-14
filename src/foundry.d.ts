@@ -72,6 +72,7 @@ interface TokenDocument {
 }
 
 interface Token {
+  mesh?: { texture: unknown };
   movementAnimationPromise?: Promise<unknown> | null;
   hasSight?: boolean;
   _getVisionSourceData?(): Record<string, unknown>;
@@ -180,6 +181,7 @@ declare const game: {
 };
 
 declare const foundry: {
+  canvas: { animation: { CanvasAnimation: { terminateAnimation(name: string): void } } };
   applications: { api: { DialogV2: {
     confirm(options: {
       window: { title: string }; content: string; modal: boolean; rejectClose: boolean;
@@ -189,6 +191,10 @@ declare const foundry: {
 };
 
 declare const canvas: {
+  stage: { pivot: Point; scale: Point };
+  pan(view: { x: number; y: number; scale: number }): void;
+  animatePan(view: { x: number; y: number; scale: number; duration: number }): Promise<unknown>;
+  masks?: { vision: { renderDirty: boolean } };
   grid: {
     isSquare: boolean;
     size: number;
@@ -230,6 +236,7 @@ declare const canvas: {
     };
   };
   visibility: {
+    vision?: { sight: { preview: PIXI.Container }; light: { preview: PIXI.Container; mask: { preview: PIXI.Container } } };
     tokenVision: boolean;
     _createVisibilityTestConfig(
       points: Point | Point[],
@@ -241,6 +248,7 @@ declare const canvas: {
 declare const CONFIG: {
   DND5E?: { movementTypes: Record<string, { walkFallback?: boolean }> };
   Canvas: {
+    dragSpeedModifier?: number;
     visionSourceClass?: new (options: { object: Token; sourceId: string }) => VisionSource;
     elevationSnappingPrecision: number;
     detectionModes: Record<
@@ -266,15 +274,18 @@ declare const ui: {
 
 declare namespace PIXI {
   class Container {
+    destroyed: boolean;
     interactiveChildren: boolean;
     sortableChildren: boolean;
     zIndex: number;
     eventMode: string;
-    addChild<T extends Container | Graphics | Text>(child: T): T;
+    addChild<T extends Container | Graphics | Text | Sprite>(child: T): T;
     destroy(options?: { children?: boolean }): void;
   }
 
   class Graphics {
+    destroyed: boolean;
+    destroy(): void;
     cursor: string;
     eventMode: string;
     zIndex: number;
@@ -296,6 +307,14 @@ declare namespace PIXI {
     ctrlKey: boolean;
     metaKey: boolean;
     stopPropagation(): void;
+  }
+
+  class Sprite {
+    constructor(texture: unknown);
+    anchor: { set(x: number, y?: number): void };
+    position: { set(x: number, y: number): void };
+    width: number;
+    height: number;
   }
 
   class Text {

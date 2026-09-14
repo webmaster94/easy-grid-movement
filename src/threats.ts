@@ -40,7 +40,7 @@ export function rangeBand(ranges: readonly WeaponRange[], distance: number): Thr
   return ranges.some(range => distance <= range.long + 0.01) ? "long" : null;
 }
 
-export interface ThreatDiscovery { path: MovementWaypoint[]; remainder: MovementWaypoint[] }
+export interface ThreatDiscovery { path: MovementWaypoint[]; remainder: MovementWaypoint[]; enemyIds: string[] }
 
 export class ThreatDetector {
   get enabled(): boolean { return game.settings.get(MODULE_ID, DETECT_THREATS_SETTING) === true; }
@@ -66,31 +66,53 @@ export class ThreatDetector {
     }));
   }
 
-  firstDiscovery(token: Token, path: readonly MovementWaypoint[]): ThreatDiscovery | null {
+  firstDiscovery(token: Token, path: readonly MovementWaypoint[], known: ReadonlySet<string> = new Set()): ThreatDiscovery | null {
     if (!this.enabled || path.length < 2) return null;
     const enemies = this.#enemies(token);
-    const unseen = this.#withSight(token, path[0]!, canSee => enemies.filter(enemy => !canSee(enemy.token)), true);
+    const unseen = this.#withSight(token, path[0]!, canSee => enemies.filter(enemy =>
+      !known.has(enemy.token.id) && !canSee(enemy.token)), true);
     if (!unseen.length) return null;
     const destination = path.at(-1)!;
-    for (let i = 1; i < path.length; i++) {
+    type Sample = { point: MovementWaypoint; leg: number; atEnd: boolean; travel: number };
+    let first: Sample | null = null;
+    let last: Sample | null = null;
+    let travel = 0;
+    let firstCount = 0;
+    const discovered = new Set<string>();
+    scan: for (let i = 1; i < path.length; i++) {
       const from = path[i - 1]!, to = path[i]!;
-      // Inspect intermediate positions too, including long straight and vertical segments.
-      const steps = Math.max(1, Math.ceil(Math.max(Math.hypot(to.x - from.x, to.y - from.y) / canvas.grid.size,
-        Math.abs(to.elevation - from.elevation) / canvas.grid.distance) * 4));
+      // Count spaces along the route, including diagonals and vertical movement, not terrain cost.
+      const length = Math.max(Math.abs(to.x - from.x) / canvas.grid.size,
+        Math.abs(to.y - from.y) / canvas.grid.size, Math.abs(to.elevation - from.elevation) / canvas.grid.distance);
+      const steps = Math.max(1, Math.ceil(length * 4));
       for (let step = 1; step <= steps; step++) {
-        const t = step / steps;
-        const point = step === steps ? to : { ...from, x: from.x + (to.x - from.x) * t,
+        const limit = first ? first.travel + 2 : Infinity;
+        const distance = Math.min(travel + length * step / steps, limit);
+        const t = length ? (distance - travel) / length : 1;
+        const atEnd = t >= 1 - 1e-8;
+        const point = atEnd ? to : { ...from, x: from.x + (to.x - from.x) * t,
           y: from.y + (to.y - from.y) * t, elevation: from.elevation + (to.elevation - from.elevation) * t,
           explicit: true, snapped: false, checkpoint: false };
-        const detected = this.#withSight(token, point, canSee => unseen.some(enemy => canSee(enemy.token)
-          && (this.#threat(token, destination, enemy) || this.#threat(token, point, enemy))), true);
-        if (detected) return {
-          path: [...path.slice(0, i), point],
-          remainder: [point, ...(step === steps ? path.slice(i + 1) : path.slice(i))],
-        };
+        this.#withSight(token, point, canSee => {
+          for (const enemy of unseen) {
+            if (!discovered.has(enemy.token.id) && canSee(enemy.token)
+              && (this.#threat(token, destination, enemy) || this.#threat(token, point, enemy))) discovered.add(enemy.token.id);
+          }
+        }, true);
+        last = { point, leg: i, atEnd, travel: distance };
+        if (!first && discovered.size) { first = last; firstCount = discovered.size; }
+        if (distance >= limit - 1e-8) break scan;
       }
+      travel += length;
     }
-    return null;
+    if (!first) return null;
+    // Extend only for an additional enemy, and never slide the window forward for later discoveries.
+    const stop = discovered.size > firstCount ? last! : first;
+    return {
+      path: [...path.slice(0, stop.leg), stop.point],
+      remainder: [stop.point, ...path.slice(stop.leg + (stop.atEnd ? 1 : 0))],
+      enemyIds: [...discovered],
+    };
   }
 
   #threat(token: Token, destination: MovementWaypoint, enemy: { token: Token; ranges: WeaponRange[] }): Threat | null {

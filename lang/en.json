@@ -31,5 +31,9 @@
   "EGM.Settings.DetectThreatsName": "Detect Threats when moving",
   "EGM.Settings.DetectThreatsHint": "Show visible enemies with ranged weapons that can reach your destination. Pause movement when a new threat comes into sight. Changes apply immediately for you.",
   "EGM.Threats.Detected": "Enemies Detected",
-  "EGM.Threats.Continue": "Click to continue. Right-click to stop."
+  "EGM.Threats.Continue": "Click to continue. Right-click to stop.",
+  "EGM.Settings.CinematicThreatsName": "Cinematic threat reveals",
+  "EGM.Settings.CinematicThreatsHint": "Frame newly detected enemies with a camera tour and a temporary local map reveal. Your camera returns afterward. Manual panning or zooming ends the tour. Applies immediately for you.",
+  "EGM.Settings.CinematicGroupDistanceName": "Cinematic grouping distance",
+  "EGM.Settings.CinematicGroupDistanceHint": "Maximum width or height of an enemy group, in grid spaces, for a shared camera shot. Larger values show more enemies together with a wider zoom. Applies to your next cinematic without reloading."
 }

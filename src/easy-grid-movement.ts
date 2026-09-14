@@ -1,4 +1,5 @@
-import { CONFIRM_DASH_SETTING, DEBUG_SETTING, DETECT_THREATS_SETTING, MODULE_ID } from "./constants";
+import { CINEMATIC_GROUP_DISTANCE_SETTING, CINEMATIC_THREATS_SETTING, CONFIRM_DASH_SETTING, DEBUG_SETTING, DETECT_THREATS_SETTING, MODULE_ID } from "./constants";
+import { ThreatCinematic } from "./threat-cinematic";
 import { ThreatDetector } from "./threats";
 import { DashController, movementTurnKey, type DashReservation } from "./dash";
 import { stepElevation } from "./elevation";
@@ -45,7 +46,8 @@ export class EasyGridMovement {
   readonly #renderer = new MovementRenderer();
   readonly #dash = new DashController();
   readonly #threats = new ThreatDetector();
-  #interrupted: { path: MovementWaypoint[]; turn: string; action: string } | null = null;
+  readonly #cinematic = new ThreatCinematic();
+  #interrupted: { path: MovementWaypoint[]; turn: string; action: string; known: Set<string> } | null = null;
   readonly #tracker = new MovementTracker(
     (tokenId) => this.refresh(tokenId),
     (tokenId) => this.#active && tokenId === this.#tokenId,
@@ -78,11 +80,22 @@ export class EasyGridMovement {
     if (this.#initialized) return;
     this.#initialized = true;
 
+    game.settings.register(MODULE_ID, CINEMATIC_THREATS_SETTING, {
+      name: game.i18n.localize("EGM.Settings.CinematicThreatsName"),
+      hint: game.i18n.localize("EGM.Settings.CinematicThreatsHint"),
+      scope: "user", config: true, type: Boolean, default: true, requiresReload: false,
+      onChange: () => this.#cinematic.cancel(),
+    });
+    game.settings.register(MODULE_ID, CINEMATIC_GROUP_DISTANCE_SETTING, {
+      name: game.i18n.localize("EGM.Settings.CinematicGroupDistanceName"),
+      hint: game.i18n.localize("EGM.Settings.CinematicGroupDistanceHint"),
+      scope: "user", config: true, type: Number, default: 6, range: { min: 2, max: 20, step: 1 }, requiresReload: false,
+    });
     game.settings.register(MODULE_ID, DETECT_THREATS_SETTING, {
       name: game.i18n.localize("EGM.Settings.DetectThreatsName"),
       hint: game.i18n.localize("EGM.Settings.DetectThreatsHint"),
       scope: "user", config: true, type: Boolean, default: false, requiresReload: false,
-      onChange: () => { this.#interrupted = null; this.refresh(); },
+      onChange: () => { this.#cinematic.clear(); this.#interrupted = null; this.refresh(); },
     });
 
     game.settings.register(MODULE_ID, CONFIRM_DASH_SETTING, {
@@ -112,6 +125,7 @@ export class EasyGridMovement {
 
     Hooks.on("controlToken", (token, controlled) => {
       if (controlled && this.#active) {
+        this.#cinematic.clear();
         this.#interrupted = null;
         if (!game.combat?.started) { this.#tracker.reset(token.id); this.#dash.reset(token.id); }
         this.#tokenId = token.id;
@@ -173,6 +187,7 @@ export class EasyGridMovement {
   }
 
   deactivate(): void {
+    this.#cinematic.clear();
     this.#drawRequestId += 1;
     if (this.#sightTimer !== null) globalThis.clearTimeout(this.#sightTimer);
     this.#sightTimer = null;
@@ -198,6 +213,7 @@ export class EasyGridMovement {
     if (this.#interrupted && (!this.#samePosition(this.#interrupted.path[0]!, token.document._source)
       || this.#interrupted.turn !== movementTurnKey() || this.#interrupted.action !== token.document.movementAction)) {
       this.#interrupted = null;
+      this.#cinematic.clear();
     }
     if (this.#origin && !this.#samePosition(this.#origin, token.document._source)) this.#clearWaypoints();
     this.#origin = { ...token.document._source };
@@ -240,7 +256,7 @@ export class EasyGridMovement {
       return;
     }
 
-    this.#renderer.clear();
+    this.#renderer.clear(true);
     const search = this.#calculatePlan(token, remainingWalk, remainingDash, remainingOver);
     // Bound each search slice so animation, zoom, and cancellation remain responsive.
     this.whenReady = new Promise<void>((resolve) => {
@@ -268,6 +284,7 @@ export class EasyGridMovement {
         this.#adjustPreviewElevation(token, key, wheelDelta, precise),
       onSelect: (key, waypoint) => void (waypoint ? this.addWaypoint(key) : this.moveTo(key)),
       onCancel: () => this.removeWaypoint(),
+      onNavigate: () => this.#cinematic.releaseCamera(),
     });
     const pinned = this.#waypoints.at(-1);
     if (pinned) this.#renderPreview(token, pinned, plan);
@@ -357,7 +374,7 @@ export class EasyGridMovement {
     const plan = this.#plan;
     const token = canvas.tokens.get(this.#tokenId);
     const interrupted = this.#interrupted;
-    if (interrupted?.path.length === 1) { this.#interrupted = null; this.refresh(); return; }
+    if (interrupted?.path.length === 1) { this.#cinematic.clear(); this.#interrupted = null; this.refresh(); return; }
     const path = this.#plan.reachability.paths.get(destinationKey);
     if (!token || (!path && !interrupted)) return;
     const elevation =
@@ -369,6 +386,7 @@ export class EasyGridMovement {
     let dash: DashReservation | null = null;
     let completed = false;
     let remainder: MovementWaypoint[] | null = null;
+    let detected: string[] = [];
     const origin = { ...token.document._source };
     const action = token.document.movementAction;
     const speed = this.#getMovementSpeed(token);
@@ -384,8 +402,9 @@ export class EasyGridMovement {
         return Number.isFinite(resolved.cost) ? resolved : null;
       };
       const prepare = (full: ResolvedMovementPath): ResolvedMovementPath => {
-        const discovery = this.#threats.firstDiscovery(token, full.movementPath);
+        const discovery = this.#threats.firstDiscovery(token, full.movementPath, interrupted?.known);
         remainder = discovery?.remainder ?? null;
+        detected = discovery?.enemyIds ?? [];
         return discovery ? this.#resolvedPath(token, discovery.path, false) : full;
       };
       const full = await resolve();
@@ -447,11 +466,24 @@ export class EasyGridMovement {
       this.#tracker.finishPlannedMove(token.id);
       completed = true;
       this.#clearWaypoints();
-      this.#interrupted = remainder ? { path: remainder, turn, action } : null;
+      const known = new Set([...(interrupted?.known ?? []), ...detected]);
+      this.#interrupted = remainder ? { path: remainder, turn, action, known } : null;
       // Document coordinates commit before the rendered token and its vision reach the endpoint.
       // Keep refresh hooks suspended until the native animation has finished.
       await token.movementAnimationPromise;
-      if (remainder && this.#active) ui.notifications.info(game.i18n.localize("EGM.Threats.Detected"));
+      if (remainder && this.#active && this.#tokenId === token.id && this.#threats.enabled) {
+        this.#cinematic.highlight([...known]);
+        if (game.settings.get(MODULE_ID, CINEMATIC_THREATS_SETTING) !== false) {
+          try {
+            this.draw(token);
+            await this.#cinematic.play(detected, () => this.#active && this.#tokenId === token.id
+              && movementTurnKey() === turn && this.#threats.enabled);
+          } catch (error) {
+            console.error("[Easy Grid Movement] Threat cinematic failed", error);
+            ui.notifications.info(game.i18n.localize("EGM.Threats.Detected"));
+          }
+        } else ui.notifications.info(game.i18n.localize("EGM.Threats.Detected"));
+      } else this.#cinematic.clear();
       moveStarted = false;
     } catch (error) {
       if (moveStarted) this.#tracker.cancelPlannedMove(token.id);
@@ -501,8 +533,13 @@ export class EasyGridMovement {
   }
 
   removeWaypoint(): void {
+    if (this.#cinematic.playing) {
+      this.#cinematic.clear(); this.#interrupted = null; this.#clearWaypoints();
+      return;
+    }
     if (this.#moving) return;
     if (this.#interrupted) {
+      this.#cinematic.clear();
       this.#interrupted = null;
       this.#clearWaypoints();
       this.refresh();

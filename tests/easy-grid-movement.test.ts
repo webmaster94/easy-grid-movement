@@ -8,9 +8,15 @@ vi.mock("../src/renderer", () => ({ MovementRenderer: class {
   clearPreview = renderer.clearPreview;
   showPreview = renderer.showPreview;
 } }));
+const cinematic = vi.hoisted(() => ({ playing: false, play: vi.fn().mockResolvedValue(undefined), highlight: vi.fn(), clear: vi.fn(), cancel: vi.fn(), releaseCamera: vi.fn() }));
+vi.mock("../src/threat-cinematic", () => ({ ThreatCinematic: class {
+  get playing() { return cinematic.playing; }
+  play = cinematic.play; highlight = cinematic.highlight; clear = cinematic.clear; cancel = cinematic.cancel;
+  releaseCamera = cinematic.releaseCamera;
+} }));
 import { ThreatDetector } from "../src/threats";
 import { EasyGridMovement } from "../src/easy-grid-movement";
-import { CONFIRM_DASH_SETTING, DETECT_THREATS_SETTING } from "../src/constants";
+import { CINEMATIC_THREATS_SETTING, CONFIRM_DASH_SETTING, DETECT_THREATS_SETTING } from "../src/constants";
 
 function handlers(): MovementRendererHandlers {
   return renderer.draw.mock.lastCall?.[4] as MovementRendererHandlers;
@@ -23,6 +29,7 @@ describe("movement interaction", () => {
   let confirm: ReturnType<typeof vi.fn<(options: unknown) => Promise<boolean | null>>>;
   let confirmEnabled: boolean;
   let threatsEnabled: boolean;
+  let cinematicEnabled: boolean;
   let register: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -61,11 +68,14 @@ describe("movement interaction", () => {
     });
     confirmEnabled = true;
     threatsEnabled = false;
+    cinematicEnabled = false;
+    cinematic.playing = false;
+    cinematic.play.mockResolvedValue(undefined);
     register = vi.fn();
     confirm = vi.fn<(options: unknown) => Promise<boolean | null>>().mockResolvedValue(true);
     vi.stubGlobal("foundry", { applications: { api: { DialogV2: { confirm } } } });
     vi.stubGlobal("Hooks", { on: vi.fn() });
-    vi.stubGlobal("game", { settings: { register, get: (_id: string, key: string) => key === CONFIRM_DASH_SETTING ? confirmEnabled : key === DETECT_THREATS_SETTING ? threatsEnabled : false }, keybindings: { register: vi.fn() }, i18n: { localize: (s: string) => s } });
+    vi.stubGlobal("game", { settings: { register, get: (_id: string, key: string) => key === CONFIRM_DASH_SETTING ? confirmEnabled : key === DETECT_THREATS_SETTING ? threatsEnabled : key === CINEMATIC_THREATS_SETTING ? cinematicEnabled : false }, keybindings: { register: vi.fn() }, i18n: { localize: (s: string) => s } });
     vi.stubGlobal("CONFIG", { DND5E: { movementTypes: { walk: {}, fly: {}, burrow: {}, swim: { walkFallback: true }, climb: { walkFallback: true } } }, Canvas: { elevationSnappingPrecision: 4 } });
     vi.stubGlobal("ui", { notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
     vi.stubGlobal("canvas", {
@@ -153,6 +163,33 @@ describe("movement interaction", () => {
     expect(footprint).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the paused route during the camera tour and cancels its remainder on right-click", async () => {
+    enemy(250); cinematicEnabled = true;
+    let finish!: () => void;
+    cinematic.play.mockImplementationOnce(() => {
+      cinematic.playing = true;
+      return new Promise<void>(resolve => { finish = () => { cinematic.playing = false; resolve(); }; });
+    });
+    const moving = movement.moveTo("0,6");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cinematic.play).toHaveBeenCalledWith(["enemy"], expect.any(Function));
+    expect(renderer.showPreview.mock.lastCall?.[0]).toMatchObject({ enemiesDetected: true });
+    movement.removeWaypoint(); finish(); await moving;
+    expect(cinematic.clear).toHaveBeenCalled();
+    expect(token.document._source.x).toBe(250);
+    expect(movement.moving).toBe(false);
+    expect(update).toHaveBeenCalledOnce();
+    expect(ui.notifications.info).not.toHaveBeenCalled();
+  });
+
+  it("registers a personal cinematic switch that cancels the tour immediately", () => {
+    movement.initialize();
+    const setting = register.mock.calls.find(args => args[1] === CINEMATIC_THREATS_SETTING)?.[2] as { onChange: (value: boolean) => void };
+    expect(setting).toMatchObject({ scope: "user", default: true, requiresReload: false });
+    setting.onChange(false);
+    expect(cinematic.cancel).toHaveBeenCalledOnce();
+  });
+
   it("moves far enough to see a threat's center instead of stopping at a tiny edge glimpse", () => {
     const foe = enemy();
     canvas.visibility.tokenVision = true;
@@ -204,6 +241,63 @@ describe("movement interaction", () => {
     await movement.moveTo("0,6");
     expect(collisions.mock.calls.length).toBeLessThan(10);
     expect(renderer.showPreview.mock.lastCall?.[0]).toMatchObject({ enemiesDetected: true });
+  });
+
+  function groupedEnemies(secondAt: number, firstVanishes = false): void {
+    const first = enemy();
+    const second = { ...first, id: "second", document: { ...first.document, id: "second",
+      getMovementOrigin: () => ({ x: 850, y: 550, elevation: 0 }) } };
+    canvas.tokens.placeables.push(second);
+    token.checkCollision = (target, options) => {
+      const x = options?.origin?.x ?? 0;
+      return target.x === 950 ? x < 250 || (firstVanishes && x > 300 && x < 500) : x < secondAt;
+    };
+  }
+
+  it("groups additional enemies inside a fixed two-space lookahead and continues without repeating them", async () => {
+    groupedEnemies(350, true);
+    await movement.moveTo("0,6");
+    expect(token.document._source.x).toBe(450);
+    expect(cinematic.highlight).toHaveBeenLastCalledWith(["enemy", "second"]);
+    await movement.moveTo("0,6");
+    expect(token.document._source.x).toBe(600);
+    expect(ui.notifications.info).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not move extra spaces when the next enemy is outside the lookahead", async () => {
+    groupedEnemies(475);
+    await movement.moveTo("0,6");
+    expect(token.document._source.x).toBe(250);
+  });
+
+  it("clamps an extended stop to the selected destination", async () => {
+    groupedEnemies(350);
+    await movement.moveTo("0,4");
+    expect(token.document._source.x).toBe(400);
+    expect(cinematic.highlight).toHaveBeenLastCalledWith(["enemy", "second"]);
+  });
+
+  it("does not slide the two-space window forward when another enemy is detected", () => {
+    groupedEnemies(425);
+    const first = canvas.tokens.placeables[1]!;
+    canvas.tokens.placeables.push({ ...first, id: "third", document: { ...first.document, id: "third",
+      getMovementOrigin: () => ({ x: 750, y: 550, elevation: 0 }) } });
+    token.checkCollision = (target, options) => (options?.origin?.x ?? 0) < (target.x === 950 ? 250 : target.x === 850 ? 425 : 500);
+    const s = token.document._source;
+    const discovery = new ThreatDetector().firstDiscovery(token, [s, { ...s, x: 700 }]);
+    expect(discovery?.path.at(-1)?.x).toBeCloseTo(450);
+    expect(discovery?.enemyIds).toEqual(["enemy", "second"]);
+  });
+
+  it("counts the lookahead along turns instead of measuring a straight shortcut", () => {
+    groupedEnemies(350);
+    token.checkCollision = (target, options) => {
+      const p = options?.origin;
+      return target.x === 950 ? (p?.x ?? 0) < 250 : (p?.y ?? 0) < 100;
+    };
+    const s = token.document._source;
+    const discovery = new ThreatDetector().firstDiscovery(token, [s, { ...s, x: 300 }, { ...s, x: 300, y: 400 }]);
+    expect(discovery?.path.at(-1)).toMatchObject({ x: 300, y: 150 });
   });
 
   it("right-click discards the remainder, keeps completed movement, and allows a new plan", async () => {
