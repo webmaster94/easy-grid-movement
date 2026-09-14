@@ -48,7 +48,9 @@ export class EasyGridMovement {
   readonly #dash = new DashController();
   readonly #threats = new ThreatDetector();
   readonly #cinematic = new ThreatCinematic();
-  #interrupted: { path: MovementWaypoint[]; turn: string; action: string; known: Set<string> } | null = null;
+  #interrupted: { path: MovementWaypoint[]; turn: string; action: string; highlighted: Set<string> } | null = null;
+  #awarenessScene: typeof canvas.scene | null = null;
+  readonly #knownEnemies = new Map<string, Set<string>>();
   readonly #tracker = new MovementTracker(
     (tokenId) => this.refresh(tokenId),
     (tokenId) => this.#active && tokenId === this.#tokenId,
@@ -157,7 +159,11 @@ export class EasyGridMovement {
       "createRegionBehavior", "updateRegionBehavior", "deleteRegionBehavior", "createToken", "deleteToken"] as const) {
       Hooks.on(hook, () => this.refresh());
     }
-    Hooks.on("canvasTearDown", () => this.deactivate());
+    Hooks.on("canvasTearDown", () => {
+      this.deactivate();
+      this.#knownEnemies.clear();
+      this.#awarenessScene = null;
+    });
     Hooks.on("updateToken", (document, changes) => {
       if (["movementAction", "width", "height", "depth", "shape", "level"].some(key => key in changes)) this.refresh();
       else if (document.id !== this.#tokenId && ["x", "y", "elevation", "width", "height", "depth", "level"].some(key => key in changes)) this.refresh();
@@ -267,7 +273,13 @@ export class EasyGridMovement {
         const deadline = performance.now() + 8;
         let result = search.next();
         while (!result.done && performance.now() < deadline) result = search.next();
-        if (!result.done) { globalThis.setTimeout(advance, 0); return; }
+        if (!result.done) {
+          // Timer nesting adds delay to every batch and is heavily throttled in background tabs.
+          const scheduler = (globalThis as { scheduler?: { yield(): Promise<void> } }).scheduler;
+          if (scheduler?.yield) void scheduler.yield().then(advance);
+          else globalThis.setTimeout(advance, 0);
+          return;
+        }
         this.#plan = result.value;
         this.#displayPlan(token, this.#plan);
         resolve();
@@ -418,12 +430,19 @@ export class EasyGridMovement {
     const action = token.document.movementAction;
     const speed = this.#getMovementSpeed(token);
     const turn = movementTurnKey();
-    const known = new Set(interrupted?.known ?? []);
+    // Awareness belongs to this token's scene visit, not to a route, movement interface, or turn.
+    if (this.#awarenessScene !== canvas.scene) {
+      this.#knownEnemies.clear();
+      this.#awarenessScene = canvas.scene;
+    }
+    let known = this.#knownEnemies.get(token.id);
+    if (!known) { known = new Set(); this.#knownEnemies.set(token.id, known); }
+    const highlighted = new Set(interrupted?.highlighted ?? []);
     const isCurrent = (): boolean => this.#active && plan === this.#plan && turn === movementTurnKey()
       && action === token.document.movementAction && speed === this.#getMovementSpeed(token)
       && this.#samePosition(origin, token.document._source);
     try {
-      for (const id of this.#threats.visibleEnemies(token)) known.add(id);
+      for (const id of this.#threats.visibleEnemies(token)) { known.add(id); highlighted.add(id); }
       const resolve = async (): Promise<ResolvedMovementPath | null> => {
         if (!interrupted) return this.#resolveMovementPath(token, path!, elevation, false);
         if (!this.#checkSavedPath(token, interrupted.path)) return null;
@@ -495,15 +514,15 @@ export class EasyGridMovement {
       this.#tracker.finishPlannedMove(token.id);
       completed = true;
       this.#clearWaypoints();
-      for (const id of detected) known.add(id);
+      for (const id of detected) { known.add(id); highlighted.add(id); }
       // prepare assigns this inside a callback; TypeScript does not track that assignment.
       const remainingPath = remainder as MovementWaypoint[] | null;
-      this.#interrupted = remainingPath && remainingPath.length > 1 ? { path: remainingPath, turn, action, known } : null;
+      this.#interrupted = remainingPath && remainingPath.length > 1 ? { path: remainingPath, turn, action, highlighted } : null;
       // Document coordinates commit before the rendered token and its vision reach the endpoint.
       // Keep refresh hooks suspended until the native animation has finished.
       await token.movementAnimationPromise;
       if (remainder && this.#active && this.#tokenId === token.id && this.#threats.enabled) {
-        this.#cinematic.highlight([...known]);
+        this.#cinematic.highlight([...highlighted]);
         if (game.settings.get(MODULE_ID, CINEMATIC_THREATS_SETTING) !== false) {
           try {
             if (this.#interrupted) this.draw(token);

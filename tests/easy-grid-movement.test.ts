@@ -181,6 +181,35 @@ describe("movement interaction", () => {
     expect(terrain.mock.calls.some(([path]) => path.length > 2)).toBe(true);
   });
 
+  it("finishes a sliced range search without waiting for nested timers", async () => {
+    const expected = movement.calculatePlan(token, 30, 60, 90);
+    let time = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => time += 9);
+    const yieldTask = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("scheduler", { yield: yieldTask });
+    try {
+      movement.draw(token);
+      await movement.whenReady;
+      expect(yieldTask).toHaveBeenCalled();
+      expect(renderer.draw.mock.lastCall?.slice(0, 3)).toEqual([expected.walk, expected.dash, expected.over]);
+    } finally { now.mockRestore(); }
+  });
+
+  it("does not display a canceled range after a scheduled batch resumes", async () => {
+    let time = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => time += 9);
+    let resume!: () => void;
+    vi.stubGlobal("scheduler", { yield: () => new Promise<void>(resolve => { resume = resolve; }) });
+    try {
+      renderer.draw.mockClear();
+      movement.draw(token);
+      movement.deactivate();
+      resume();
+      await movement.whenReady;
+      expect(renderer.draw).not.toHaveBeenCalled();
+    } finally { now.mockRestore(); }
+  });
+
   it("shows the paused route during the camera tour and cancels its remainder on right-click", async () => {
     enemy(250); cinematicEnabled = true;
     let finish!: () => void;
@@ -315,6 +344,25 @@ describe("movement interaction", () => {
     expect(token.document._source.x).toBe(250);
     await movement.moveTo("0,6");
     expect(token.document._source.x).toBe(600);
+    expect(ui.notifications.info).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["finish", "cancel", "reopen", "turn"])("remembers the room left behind across %s", async (transition) => {
+    groupedEnemies(250);
+    token.checkCollision = (target, options) => {
+      const x = options?.origin?.x ?? 0;
+      return target.x === 950 ? x > 100 : x < 250;
+    };
+    await movement.moveTo("0,3");
+    if (transition === "cancel") movement.removeWaypoint();
+    else await movement.moveTo("0,3");
+    expect(token.document._source.x).toBe(transition === "cancel" ? 250 : 300);
+    expect(ui.notifications.info).toHaveBeenCalledTimes(1);
+    if (transition === "reopen") { movement.deactivate(); movement.toggle(); }
+    if (transition === "turn") Object.assign(game, { combat: { id: "combat", started: true, round: 2, turn: 0 } });
+    await vi.runAllTimersAsync();
+    await movement.moveTo("0,0");
+    expect(token.document._source.x).toBe(0);
     expect(ui.notifications.info).toHaveBeenCalledTimes(1);
   });
 
