@@ -41,6 +41,8 @@ export class CanvasNavigation {
   #move = (event: PointerEvent): void => {
     const gesture = this.#gesture;
     if (!gesture || gesture.pointer !== event.pointerId) return;
+    // Canvas pan emits synthetic hover moves with buttons=0. They are not mouse releases.
+    if (event.isTrusted === false) return;
     if (!(event.buttons & 2)) { this.#reset(); return; }
     this.#consume(event);
     if (!gesture.dragging && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) >= 6) {

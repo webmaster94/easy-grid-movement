@@ -1,6 +1,6 @@
 {
   "name": "easy-grid-movement",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "private": true,
   "type": "module",
   "description": "Foundry VTT movement-range highlighting for square grids.",

@@ -13,7 +13,7 @@ function setup() {
   const cancel = vi.fn(), navigate = vi.fn(), navigation = new CanvasNavigation();
   navigation.activate(cancel, navigate);
   const event = (changes = {}) => ({ button: 2, buttons: 2, pointerId: 1, clientX: 100, clientY: 100,
-    timeStamp: 0, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), ...changes });
+    timeStamp: 0, isTrusted: true, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), ...changes });
   const send = (name: string, changes = {}) => { const e = event(changes); listeners.get(name)?.(e); return e; };
   return { navigation, send, cancel, navigate, pan, hit, listeners };
 }
@@ -39,12 +39,35 @@ describe("right click versus canvas pan", () => {
     send("pointerdown"); send("pointermove", { clientX: 102 }); send("pointerup", { clientX: 102, timeStamp: 100 });
     expect(cancel).toHaveBeenCalledOnce(); expect(pan).not.toHaveBeenCalled();
   });
+  it("continues a long drag through synthetic hover updates emitted by canvas pan", () => {
+    const { send, cancel, pan, navigate } = setup();
+    pan.mockImplementation((view: { x: number; y: number }) => {
+      Object.assign(canvas.stage.pivot, view);
+      send("pointermove", { clientX: 120, buttons: 0, isTrusted: false });
+    });
+    send("pointerdown");
+    send("pointermove", { clientX: 120 });
+    send("pointermove", { clientX: 250 });
+    send("pointermove", { clientX: 500 });
+    send("pointerup", { clientX: 500, timeStamp: 900 });
+    expect(pan).toHaveBeenCalledTimes(3);
+    expect(pan).toHaveBeenLastCalledWith({ x: -300, y: 600, scale: .5 });
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+  });
   it("preserves a gesture across overlay redraws and resets it on blur", () => {
     const { navigation, send, cancel, navigate, pan, listeners } = setup();
     send("pointerdown"); navigation.activate(cancel, navigate);
     send("pointermove", { clientX: 120 }); expect(pan).toHaveBeenCalledOnce();
     send("blur"); send("pointerup", { timeStamp: 100 }); expect(cancel).not.toHaveBeenCalled();
     navigation.clear(); expect(listeners.size).toBe(0);
+  });
+  it("ends a drag when a real pointer move reports that the button was released", () => {
+    const { send, pan, cancel } = setup();
+    send("pointerdown"); send("pointermove", { clientX: 120 });
+    send("pointermove", { clientX: 250, buttons: 0 });
+    send("pointermove", { clientX: 500 }); send("pointerup", { timeStamp: 200 });
+    expect(pan).toHaveBeenCalledOnce(); expect(cancel).not.toHaveBeenCalled();
   });
   it("leaves sidebar clicks and unrelated buttons untouched", () => {
     const { send, hit, cancel } = setup();
